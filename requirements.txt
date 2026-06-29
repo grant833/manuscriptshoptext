@@ -1,0 +1,8 @@
+Flask==3.*
+Pillow>=10
+numpy>=1.26
+opencv-python-headless>=4.9
+# Optional: only used if the `tesseract` binary is installed on the system.
+# Install the binary separately, e.g. on Debian/Ubuntu:
+#   apt-get install -y tesseract-ocr tesseract-ocr-grc
+pytesseract>=0.3.10

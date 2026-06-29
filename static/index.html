@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manuscript Text Workspace</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Manuscript Text Workspace</h1>
+  <div class="header-actions">
+    <span id="ocr-status" class="pill pill-muted">checking OCR…</span>
+    <label class="file-btn">
+      Upload image
+      <input type="file" id="file-input" accept="image/*" hidden>
+    </label>
+  </div>
+</header>
+
+<main>
+  <!-- ---------------- Controls ---------------- -->
+  <aside id="controls">
+    <h2>Cleaning controls</h2>
+    <p class="hint">Deterministic image processing — no AI. Lost or broken ink
+       stays blank, so damage shows exactly as it is.</p>
+
+    <fieldset>
+      <legend>Crop to leaf</legend>
+      <p class="hint">Drag a box on the <b>Original</b> image to exclude the mat
+         and colour card.</p>
+      <div class="btn-row">
+        <button id="auto-crop">Auto-detect</button>
+        <button id="reset-crop">Reset</button>
+      </div>
+      <div id="crop-readout" class="readout">no crop</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Background</legend>
+      <label class="check"><input type="checkbox" id="flatten" checked>
+        Flatten lighting / fibre tone</label>
+      <label>Background kernel <output id="bg_kernel-out">41</output>
+        <input type="range" id="bg_kernel" min="5" max="151" step="2" value="41"></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Contrast</legend>
+      <label class="check"><input type="checkbox" id="clahe" checked>
+        Local contrast (CLAHE)</label>
+      <label>Clip limit <output id="clahe_clip-out">2.0</output>
+        <input type="range" id="clahe_clip" min="0.5" max="8" step="0.5" value="2"></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Threshold</legend>
+      <label>Method
+        <select id="threshold">
+          <option value="adaptive" selected>Adaptive (recommended)</option>
+          <option value="otsu">Otsu (global auto)</option>
+          <option value="manual">Manual cutoff</option>
+        </select></label>
+      <div data-when="adaptive">
+        <label>Window <output id="block_size-out">31</output>
+          <input type="range" id="block_size" min="3" max="151" step="2" value="31"></label>
+        <label>Sensitivity (C) <output id="C-out">15</output>
+          <input type="range" id="C" min="0" max="40" step="1" value="15"></label>
+      </div>
+      <div data-when="manual" hidden>
+        <label>Cutoff <output id="manual_thresh-out">127</output>
+          <input type="range" id="manual_thresh" min="0" max="255" step="1" value="127"></label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Despeckle</legend>
+      <p class="hint">Off by default so faint strokes are never erased.</p>
+      <label>Min ink blob (px) <output id="min_blob-out">0</output>
+        <input type="range" id="min_blob" min="0" max="60" step="1" value="0"></label>
+    </fieldset>
+
+    <div class="btn-row sticky-actions">
+      <label class="check"><input type="checkbox" id="live" checked> Live</label>
+      <button id="process" class="primary">Process</button>
+    </div>
+  </aside>
+
+  <!-- ---------------- Image viewer ---------------- -->
+  <section id="viewer">
+    <div class="tabs">
+      <button class="tab active" data-tab="original">Original</button>
+      <button class="tab" data-tab="cleaned">Cleaned</button>
+    </div>
+    <div class="stage" id="stage-original">
+      <div id="image-wrap">
+        <img id="img-original" alt="">
+        <div id="crop-box" hidden></div>
+      </div>
+      <p class="placeholder" id="placeholder">Upload a manuscript image to begin.</p>
+    </div>
+    <div class="stage" id="stage-cleaned" hidden>
+      <img id="img-cleaned" alt="">
+    </div>
+  </section>
+
+  <!-- ---------------- Transcription ---------------- -->
+  <section id="transcribe">
+    <h2>Transcription</h2>
+    <p class="hint">Type exactly what you see. Use the markers for damaged or
+       uncertain text (standard Leiden conventions).</p>
+    <div class="marker-bar">
+      <button data-wrap="[|]" title="Lost text restored by editor">[ ]</button>
+      <button data-ins="̣" title="Dot under previous letter = uncertain reading">◌̣</button>
+      <button data-wrap="(|)" title="Expansion of an abbreviation">( )</button>
+      <button data-wrap="⟦|⟧" title="Deletion by the scribe">⟦ ⟧</button>
+      <button data-ins="[ -ca. -]" title="Lacuna of estimated length">lacuna</button>
+      <button data-ins="̅" title="Overline (nomen sacrum) over previous letter">◌̅</button>
+    </div>
+    <textarea id="text" spellcheck="false"
+      placeholder="The surviving text, transcribed faithfully…"></textarea>
+    <div class="btn-row">
+      <button id="ocr" disabled>OCR draft</button>
+      <button id="save" class="primary">Save</button>
+      <a id="download" href="#" hidden>Download .txt</a>
+      <span id="save-status" class="readout"></span>
+    </div>
+    <p class="hint" id="ocr-note" hidden>OCR draft is an <b>unverified</b>,
+       error-prone starting point — correct it against the image.</p>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

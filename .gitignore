@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime data (uploaded + processed images, saved transcriptions)
+uploads/*
+outputs/*
+!uploads/.gitkeep
+!outputs/.gitkeep
+
+# Generated test fixtures
+samples/
+
+# OS
+.DS_Store

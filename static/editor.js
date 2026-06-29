@@ -115,6 +115,7 @@ function bind() {
   $("opac").oninput = (e) => { state.opac = +e.target.value; $("opac-out").textContent = e.target.value; render(); };
   $("export-png").onclick = exportPng;
   $("export-svg").onclick = exportSvg;
+  $("save-training").onclick = saveTraining;
 
   view.addEventListener("pointerdown", onDown);
   view.addEventListener("pointermove", onMove);
@@ -192,6 +193,18 @@ async function exportSvg() {
   const a = document.createElement("a");
   a.href = j.image; a.download = `outline_${ID}.svg`; a.click();
   setStatus("Saved Outline SVG (contours only, no fill).");
+}
+
+async function saveTraining() {
+  setStatus("Saving aligned training pair…");
+  const png = mask.toDataURL("image/png");
+  const r = await fetch("/api/save_training", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: ID, png }),
+  });
+  const j = await r.json();
+  if (j.error) { setStatus("Save error: " + j.error); return; }
+  setStatus(`Saved. Training set now has ${j.pairs} aligned pair(s).`);
 }
 
 function setStatus(t) { $("status").textContent = t; }

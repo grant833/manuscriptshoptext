@@ -23,3 +23,7 @@ outbox/*
 
 # Experimental deep-learning model (train locally; needs GPU + aligned data)
 models/*.pt
+
+# Editor-collected training pairs (runtime data)
+training/*
+!training/.gitkeep

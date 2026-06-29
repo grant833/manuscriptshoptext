@@ -33,18 +33,26 @@ from flask import (Flask, jsonify, request, send_file, send_from_directory,
 
 from manuscript import ocr
 from manuscript import denoiser
+from manuscript import unet
 from manuscript.pipeline import (Params, process, extract_ink_rgba, mask_to_rgba,
                                  extract_ink_svg, trace_mask_svg, svg_available,
                                  detect_manuscript_bbox, encode_png, _apply_crop)
 
-# Optional ML denoiser model, loaded once at startup if present.
-ML_MODEL = denoiser.load_default()
+# ML cleanup backends, loaded once at startup. Prefer a trained U-Net (best,
+# handles versos once trained on aligned data); fall back to the RandomForest.
+UNET_MODEL = unet.load_default() if unet.available() else None
+RF_MODEL = denoiser.load_default()
+ML_MODEL = UNET_MODEL or RF_MODEL
+ML_BACKEND = "unet" if UNET_MODEL is not None else ("rf" if RF_MODEL else None)
 
 
 def _ml_mask(file_id, bgr, params):
     """ML-cleaned ink mask for the cropped leaf (cached for the editor/SVG)."""
     leaf = _apply_crop(bgr, params)
-    mask = denoiser.apply(ML_MODEL, leaf)
+    if UNET_MODEL is not None:
+        mask = unet.apply(UNET_MODEL, leaf)
+    else:
+        mask = denoiser.apply(RF_MODEL, leaf)
     return leaf, mask
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -114,7 +122,8 @@ def static_files(fn):
 def health():
     return jsonify({"ocr_available": ocr.available(),
                     "svg_available": svg_available(),
-                    "ml_available": ML_MODEL is not None})
+                    "ml_available": ML_MODEL is not None,
+                    "ml_backend": ML_BACKEND})
 
 
 @app.post("/api/upload")
@@ -197,6 +206,39 @@ def api_vectorize():
             fh.write(svg)
     b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     return jsonify({"svg": svg, "image": "data:image/svg+xml;base64," + b64})
+
+
+@app.post("/api/save_training")
+def api_save_training():
+    """
+    Save an aligned (photo, hand-cleaned mask) training pair from the editor.
+    These pairs are exactly what a verso-capable model needs -- a clean mask
+    drawn directly over the photo, so they pixel-align (unlike re-traced
+    facsimiles). Building this set is a no-extra-effort by-product of cleanup.
+    """
+    data = request.get_json(force=True)
+    file_id = data.get("id", "")
+    crop = os.path.join(OUTPUTS, file_id + "_crop.png")
+    if not os.path.exists(crop):
+        return jsonify({"error": "no cropped photo cached for this id"}), 404
+    raw = data.get("png", "")
+    if "," in raw:
+        raw = raw.split(",", 1)[1]
+    try:
+        arr = np.frombuffer(base64.b64decode(raw), np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+        mask = img[:, :, 3] if (img.ndim == 3 and img.shape[2] == 4) else \
+            cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        mask = (mask >= 128).astype(np.uint8) * 255
+    except Exception as e:  # pragma: no cover
+        return jsonify({"error": str(e)}), 500
+    TRAIN = os.path.join(BASE, "training")
+    os.makedirs(TRAIN, exist_ok=True)
+    import shutil
+    shutil.copyfile(crop, os.path.join(TRAIN, file_id + "_photo.png"))
+    cv2.imwrite(os.path.join(TRAIN, file_id + "_mask.png"), mask)
+    n = len([f for f in os.listdir(TRAIN) if f.endswith("_mask.png")])
+    return jsonify({"ok": True, "pairs": n})
 
 
 @app.post("/api/svg")

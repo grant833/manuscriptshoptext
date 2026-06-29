@@ -8,7 +8,7 @@ let activeTab = "original";
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
-const SLIDERS = ["bg_kernel", "C", "block_size", "min_blob", "chroma_gate", "cm"];
+const SLIDERS = ["k_weak", "edge_trim", "min_blob", "cm"];
 
 window.addEventListener("DOMContentLoaded", () => {
   bindSlots();
@@ -74,10 +74,9 @@ function updateDpi() {
 function collectParams() {
   const s = cur();
   const p = {
-    bg_kernel: +$("#bg_kernel").value,
-    C: +$("#C").value,
-    block_size: +$("#block_size").value,
-    chroma_gate: +$("#chroma_gate").value,
+    k_weak: +$("#k_weak").value,
+    edge_trim: +$("#edge_trim").value,
+    min_blob: +$("#min_blob").value,
     ink_color: $("#ink_color").value,
     min_blob: +$("#min_blob").value,
     dpi: computeDpi(),

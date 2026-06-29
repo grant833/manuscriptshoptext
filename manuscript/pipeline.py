@@ -45,25 +45,20 @@ class Params:
     crop_h: Optional[int] = None
 
     # --- Ink extraction (transparent facsimile) ---------------------------- #
-    # Size of the morphological background estimate (removes ink to reveal the
-    # bare papyrus tone). Larger = copes with bigger lighting gradients.
-    bg_kernel: int = 61
-    # Adaptive-threshold window + sensitivity for separating ink from the
-    # background-normalised papyrus. Larger C = only clearer ink kept. These are
-    # given at a 1800px-wide reference and auto-scaled to the real image size.
-    block_size: int = 51
-    C: int = 22
-    # Brown-rejection (OPTIONAL, off by default = 0): carbon ink soaked into
-    # brown papyrus often reads as brown as the papyrus, so a chroma gate tends
-    # to cut real ink. Set > 0 to fade out pixels browner than this LAB chroma.
-    chroma_gate: float = 0.0
-    chroma_soft: float = 6.0
-    # Colour of the rendered ink: "black" (default), "original" (sampled from the
-    # photo), or "sepia" (a dark brown). Fading is carried by the alpha channel.
+    # Isolate the writing area: detect the papyrus leaf and erode inward by this
+    # fraction of the width to drop the ragged, fibrous edge.
+    edge_trim: float = 0.012
+    # Two-level (hysteresis) Sauvola thresholding. The window auto-scales with
+    # the leaf width. `k_weak` is the permissive pass that captures complete
+    # faded strokes; `k_strong` is the strict pass that seeds them. Only weak
+    # regions containing a strong seed survive -> complete strokes, less noise.
+    k_weak: float = 0.06
+    k_strong: float = 0.30
+    # Colour of the rendered ink: "black" (default), "original", or "sepia".
     ink_color: str = "black"
-    # Remove isolated ink specks smaller than this many pixels (at the 1800px
-    # reference, auto-scaled). Clears papyrus-fibre flecks; real strokes survive.
-    min_blob: int = 50
+    # Remove isolated ink specks smaller than this many pixels (at a 2150px-wide
+    # leaf reference, auto-scaled). Clears papyrus-fibre flecks.
+    min_blob: int = 150
 
     # --- Output scale ------------------------------------------------------ #
     # DPI to embed so the PNG/SVG prints at the correct physical size. 0 = unset.
@@ -73,12 +68,6 @@ class Params:
     # Alpha cutoff (0-255) for which ink becomes a solid vector shape. Higher =
     # only firmer ink is vectorised.
     svg_threshold: int = 90
-
-    # --- Binary preview only ('process') ----------------------------------- #
-    clahe: bool = True
-    clahe_clip: float = 2.0
-    threshold: str = "adaptive"
-    manual_thresh: int = 127
 
     @staticmethod
     def from_dict(d: dict) -> "Params":
@@ -145,63 +134,86 @@ def detect_manuscript_bbox(bgr: np.ndarray) -> Optional[dict]:
 # Primary: ink -> transparent facsimile
 # --------------------------------------------------------------------------- #
 
+def leaf_interior_mask(bgr: np.ndarray, edge_trim: float = 0.012) -> np.ndarray:
+    """
+    Mask of the papyrus leaf's interior: the brown leaf with the bright mat and
+    saturated colour card excluded, holes filled, then eroded inward by
+    `edge_trim` of the width to drop the ragged, fibrous edge. uint8 0/255.
+    """
+    H, W = bgr.shape[:2]
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    L = lab[:, :, 0].astype(int)
+    b = lab[:, :, 2].astype(int) - 128
+    S = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)[:, :, 1].astype(int)
+    leaf = ((L < 205) & (b > 6) & (S < 150)).astype(np.uint8) * 255
+    leaf = cv2.morphologyEx(leaf, cv2.MORPH_OPEN,
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)))
+    leaf = cv2.morphologyEx(leaf, cv2.MORPH_CLOSE,
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (75, 75)))
+    n, lbl, st, _ = cv2.connectedComponentsWithStats(leaf, 8)
+    if n <= 1:
+        return np.full((H, W), 255, np.uint8)
+    big = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
+    mask = (lbl == big).astype(np.uint8) * 255
+    ff = mask.copy()
+    cv2.floodFill(ff, np.zeros((H + 2, W + 2), np.uint8), (0, 0), 255)
+    mask = mask | cv2.bitwise_not(ff)            # fill interior holes
+    r = max(1, int(edge_trim * W))
+    return cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1,) * 2))
+
+
+def _sauvola(g: np.ndarray, win: int, k: float) -> np.ndarray:
+    """Sauvola local threshold: ink where g < mean*(1 + k*(std/128 - 1))."""
+    win = _odd(win)
+    m = cv2.boxFilter(g, -1, (win, win), normalize=True)
+    s = cv2.sqrt(np.clip(cv2.boxFilter(g * g, -1, (win, win), normalize=True) - m * m, 0, None))
+    return (g < m * (1 + k * (s / 128.0 - 1))).astype(np.uint8)
+
+
 def _ink_alpha(bgr: np.ndarray, p: Params):
     """
-    Shared core: isolate the ink and return (cropped_bgr, alpha8) where alpha8
-    is the ink coverage (0 = blank, 255 = full ink). All deterministic, tuned
-    against real papyrus photos:
-      1. Background-normalise CIELAB lightness so uneven lighting, dark frayed
-         edges and the papyrus fibre tone are flattened out.
-      2. Local adaptive threshold -> a clean ink mask that ignores gradual
-         darkening (edges / fold) and keeps only locally-dark strokes.
-      3. Optional brown-rejection chroma gate.
-      4. Despeckle stray fibre flecks (real strokes are far larger).
+    Shared core: isolate the ink and return (cropped_bgr, alpha8), alpha8 being
+    ink coverage (0 = blank, 255 = full ink). All deterministic:
+      1. Restrict to the leaf interior (drops mat, card and the frayed edge).
+      2. Hysteresis Sauvola: a permissive pass captures complete faded strokes,
+         a strict pass seeds them; keep only permissive regions with a seed.
+         -> complete strokes, isolated noise dropped.
+      3. Despeckle stray fibre flecks.
+    This isolates the writing well; remaining fibre noise is meant to be wiped
+    in the manual cleanup editor.
     """
     img = _apply_crop(bgr, p)
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
-    L = lab[:, :, 0]
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)[:, :, 0].astype(np.float32)
 
-    # Auto-scale pixel-sized parameters by the cropped leaf width (a proxy for
-    # letter size) against a ~1000px reference, so the same defaults work at any
-    # resolution.
-    scale = max(0.25, img.shape[1] / 1000.0)
+    interior = leaf_interior_mask(img, p.edge_trim)
+    # Window auto-scales with leaf width (~61px at a 2150px leaf).
+    win = _odd(max(15, round(img.shape[1] / 35.0)))
+    scale = max(0.25, img.shape[1] / 2150.0)
 
-    # 1. Background-normalise lightness (close ink away, then divide).
-    k = _odd(round(p.bg_kernel * scale), lo=9)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-    bg = cv2.morphologyEx(L.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
-    bg = bg.astype(np.float32) + 1e-3
-    norm = np.clip(L / bg * 255.0, 0, 255).astype(np.uint8)
+    weak = _sauvola(g, win, p.k_weak)
+    strong = _sauvola(g, win, p.k_strong)
+    weak[interior == 0] = 0
+    strong[interior == 0] = 0
 
-    # 2. Local adaptive threshold -> ink mask (1.0 where ink).
-    mask = cv2.adaptiveThreshold(norm, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                 cv2.THRESH_BINARY_INV,
-                                 _odd(round(p.block_size * scale), 3),
-                                 int(p.C)).astype(np.float32) / 255.0
+    # Keep weak components that contain at least one strong (seed) pixel.
+    n, lbl, st, _ = cv2.connectedComponentsWithStats(weak, 8)
+    seeded = np.zeros(n, dtype=bool)
+    seeded[np.unique(lbl[strong > 0])] = True
+    seeded[0] = False
+    mask = np.where(seeded[lbl], 255, 0).astype(np.uint8)
 
-    # 3. Brown-rejection (optional): fade out pixels browner than the gate.
-    if p.chroma_gate and p.chroma_gate > 0:
-        chroma = np.hypot(lab[:, :, 1] - 128.0, lab[:, :, 2] - 128.0)
-        c_lo = float(p.chroma_gate)
-        c_hi = c_lo + max(0.1, float(p.chroma_soft))
-        mask = mask * np.clip((c_hi - chroma) / (c_hi - c_lo), 0.0, 1.0)
-    alpha = mask
-
-    # 4. Despeckle fibre flecks (area scales with resolution).
+    # Despeckle fibre flecks (area scales with resolution).
     if p.min_blob and p.min_blob > 0:
-        binar = (alpha > 0.25).astype(np.uint8)
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(binar, 8)
+        n, lbl, st, _ = cv2.connectedComponentsWithStats(mask, 8)
         keep = np.ones(n, dtype=bool)
         keep[0] = False
         min_area = int(p.min_blob * scale * scale)
         for i in range(1, n):
-            if stats[i, cv2.CC_STAT_AREA] < min_area:
+            if st[i, cv2.CC_STAT_AREA] < min_area:
                 keep[i] = False
-        alpha = alpha * keep[labels]
+        mask = np.where(keep[lbl], 255, 0).astype(np.uint8)
 
-    # Light feather so stroke edges are not jagged, then to 0..255.
-    alpha8 = cv2.GaussianBlur((alpha * 255.0).astype(np.uint8), (0, 0),
-                              max(0.4, 0.6 * scale))
+    alpha8 = cv2.GaussianBlur(mask, (0, 0), max(0.4, 0.6 * scale))
     return img, alpha8
 
 
@@ -286,28 +298,9 @@ def extract_ink_svg(bgr: np.ndarray, p: Params) -> str:
 # --------------------------------------------------------------------------- #
 
 def process(bgr: np.ndarray, p: Params) -> np.ndarray:
-    """Flat black-on-white binary preview (single channel)."""
-    img = _apply_crop(bgr, p)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    k = _odd(p.bg_kernel, lo=3)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-    bg = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
-    gray = cv2.divide(gray, bg, scale=255)
-
-    if p.clahe:
-        gray = cv2.createCLAHE(clipLimit=max(0.1, float(p.clahe_clip)),
-                               tileGridSize=(8, 8)).apply(gray)
-
-    method = (p.threshold or "adaptive").lower()
-    if method == "otsu":
-        _, out = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    elif method == "manual":
-        _, out = cv2.threshold(gray, int(p.manual_thresh), 255, cv2.THRESH_BINARY)
-    else:
-        out = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                    cv2.THRESH_BINARY, _odd(p.block_size, 3), int(p.C))
-    return out
+    """Flat black-on-white binary preview (single channel) of the isolated ink."""
+    _, alpha8 = _ink_alpha(bgr, p)
+    return np.where(alpha8 >= 90, 0, 255).astype(np.uint8)
 
 
 def auto_params(bgr: np.ndarray) -> Params:

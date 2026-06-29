@@ -44,26 +44,16 @@
     </fieldset>
 
     <fieldset>
-      <legend>Background removal</legend>
-      <label>Background scale <output id="bg_kernel-out">51</output>
-        <input type="range" id="bg_kernel" min="9" max="201" step="2" value="51"></label>
-      <p class="hint">Larger copes with bigger lighting gradients across the leaf.</p>
-    </fieldset>
-
-    <fieldset>
-      <legend>Ink</legend>
-      <label>Sensitivity (C) <output id="C-out">22</output>
-        <input type="range" id="C" min="4" max="40" step="1" value="22"></label>
-      <p class="hint">Higher = only clearer ink kept (cleaner); lower = catches
-         fainter ink (but more papyrus texture).</p>
-      <label>Detail window <output id="block_size-out">51</output>
-        <input type="range" id="block_size" min="11" max="151" step="2" value="51"></label>
-      <label>Despeckle min blob (px) <output id="min_blob-out">50</output>
-        <input type="range" id="min_blob" min="0" max="300" step="5" value="50"></label>
-      <label>Brown rejection (chroma) <output id="chroma_gate-out">0</output>
-        <input type="range" id="chroma_gate" min="0" max="30" step="1" value="0"></label>
-      <p class="hint">Brown rejection is optional (0 = off); raise only if brown
-         fibre leaks — it can also thin genuinely brown ink.</p>
+      <legend>Ink isolation</legend>
+      <label>Faint-ink pickup (k) <output id="k_weak-out">0.06</output>
+        <input type="range" id="k_weak" min="0.01" max="0.20" step="0.01" value="0.06"></label>
+      <p class="hint">Lower picks up fainter strokes (more complete) but more
+         papyrus texture; the editor wipes leftover noise.</p>
+      <label>Edge trim <output id="edge_trim-out">0.012</output>
+        <input type="range" id="edge_trim" min="0" max="0.05" step="0.002" value="0.012"></label>
+      <p class="hint">Pulls in from the ragged leaf edge to drop frayed fibres.</p>
+      <label>Despeckle min blob (px) <output id="min_blob-out">150</output>
+        <input type="range" id="min_blob" min="0" max="600" step="10" value="150"></label>
       <label>Ink colour
         <select id="ink_color">
           <option value="black" selected>Black</option>

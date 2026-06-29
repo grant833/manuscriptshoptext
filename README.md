@@ -45,12 +45,15 @@ python app.py
 1. **Upload** the **Front** and **Back** of the leaf into their slots.
 2. **Crop** to the leaf — drag a box on the *Original* view (or *Auto-detect*)
    to drop the mounting mat and colour-reference card.
-3. **Tune** the extraction (all deterministic):
+3. **Tune** the extraction (all deterministic, auto-scaled to image resolution):
    - *Background scale* — size of the lighting/papyrus-tone estimate.
-   - *Floor* — drops faint papyrus texture; keep low to preserve faint ink.
-   - *Gain* — how gently fading ramps into opacity.
-   - *Ink colour* — Original (most faithful), Black, or Sepia.
-   - *Despeckle* — off by default.
+   - *Sensitivity (C)* — higher keeps only clearer ink (cleaner); lower catches
+     fainter ink but more papyrus texture.
+   - *Detail window* — local adaptive-threshold window size.
+   - *Despeckle* — removes papyrus-fibre flecks; real strokes survive.
+   - *Brown rejection (chroma)* — optional (0 = off); fades out brown fibre, but
+     can thin genuinely brown ink, so use sparingly.
+   - *Ink colour* — Black (default), Original, or Sepia.
 4. **Print scale** — enter the leaf's real width (read it off the photo's ruler)
    so the PNG embeds the correct DPI and prints at true 1:1 size.
 5. **Run both (automatic)** processes front + back, or *Process side* for one.

@@ -52,19 +52,24 @@
 
     <fieldset>
       <legend>Ink</legend>
-      <label>Floor (drop papyrus texture) <output id="ink_floor-out">0.10</output>
-        <input type="range" id="ink_floor" min="0" max="0.5" step="0.01" value="0.10"></label>
-      <label>Gain (fading ramp) <output id="ink_gain-out">4.0</output>
-        <input type="range" id="ink_gain" min="1" max="12" step="0.5" value="4"></label>
+      <label>Sensitivity (C) <output id="C-out">22</output>
+        <input type="range" id="C" min="4" max="40" step="1" value="22"></label>
+      <p class="hint">Higher = only clearer ink kept (cleaner); lower = catches
+         fainter ink (but more papyrus texture).</p>
+      <label>Detail window <output id="block_size-out">51</output>
+        <input type="range" id="block_size" min="11" max="151" step="2" value="51"></label>
+      <label>Despeckle min blob (px) <output id="min_blob-out">50</output>
+        <input type="range" id="min_blob" min="0" max="300" step="5" value="50"></label>
+      <label>Brown rejection (chroma) <output id="chroma_gate-out">0</output>
+        <input type="range" id="chroma_gate" min="0" max="30" step="1" value="0"></label>
+      <p class="hint">Brown rejection is optional (0 = off); raise only if brown
+         fibre leaks — it can also thin genuinely brown ink.</p>
       <label>Ink colour
         <select id="ink_color">
           <option value="black" selected>Black</option>
           <option value="original">Original (sampled ink tone)</option>
           <option value="sepia">Sepia (dark brown)</option>
         </select></label>
-      <label>Despeckle min blob (px) <output id="min_blob-out">0</output>
-        <input type="range" id="min_blob" min="0" max="80" step="1" value="0"></label>
-      <p class="hint">Floor low + despeckle off = faint / broken strokes kept.</p>
     </fieldset>
 
     <fieldset>

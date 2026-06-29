@@ -42,19 +42,23 @@ class Params:
     # --- Ink extraction (transparent facsimile) ---------------------------- #
     # Size of the morphological background estimate (removes ink to reveal the
     # bare papyrus tone). Larger = copes with bigger lighting gradients.
-    bg_kernel: int = 51
-    # Ink that is darker than the local background by less than this fraction is
-    # treated as papyrus texture and dropped. Keep LOW to preserve faint ink.
-    ink_floor: float = 0.10
-    # Contrast of the alpha ramp above the floor. Higher = ink becomes opaque
-    # sooner (less translucency); lower = gentler fading preserved.
-    ink_gain: float = 4.0
+    bg_kernel: int = 61
+    # Adaptive-threshold window + sensitivity for separating ink from the
+    # background-normalised papyrus. Larger C = only clearer ink kept. These are
+    # given at a 1800px-wide reference and auto-scaled to the real image size.
+    block_size: int = 51
+    C: int = 22
+    # Brown-rejection (OPTIONAL, off by default = 0): carbon ink soaked into
+    # brown papyrus often reads as brown as the papyrus, so a chroma gate tends
+    # to cut real ink. Set > 0 to fade out pixels browner than this LAB chroma.
+    chroma_gate: float = 0.0
+    chroma_soft: float = 6.0
     # Colour of the rendered ink: "black" (default), "original" (sampled from the
     # photo), or "sepia" (a dark brown). Fading is carried by the alpha channel.
     ink_color: str = "black"
-    # Remove isolated ink specks smaller than this many pixels (0 = keep all).
-    # OFF by default so faint / broken strokes are never silently erased.
-    min_blob: int = 0
+    # Remove isolated ink specks smaller than this many pixels (at the 1800px
+    # reference, auto-scaled). Clears papyrus-fibre flecks; real strokes survive.
+    min_blob: int = 50
 
     # --- Output scale ------------------------------------------------------ #
     # DPI to embed so the PNG prints at the correct physical size. 0 = unset.
@@ -64,8 +68,6 @@ class Params:
     clahe: bool = True
     clahe_clip: float = 2.0
     threshold: str = "adaptive"
-    block_size: int = 31
-    C: int = 15
     manual_thresh: int = 127
 
     @staticmethod
@@ -129,55 +131,75 @@ def detect_manuscript_bbox(bgr: np.ndarray) -> Optional[dict]:
     return {"x": int(x), "y": int(y), "w": int(bw), "h": int(bh)}
 
 
-def _despeckle_alpha(alpha8: np.ndarray, min_blob: int) -> np.ndarray:
-    """Drop connected ink regions smaller than min_blob pixels."""
-    mask = (alpha8 > 0).astype(np.uint8)
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
-    keep = np.ones(n, dtype=bool)
-    for i in range(1, n):
-        if stats[i, cv2.CC_STAT_AREA] < int(min_blob):
-            keep[i] = False
-    return np.where(keep[labels], alpha8, 0).astype(np.uint8)
-
-
 # --------------------------------------------------------------------------- #
 # Primary: ink -> transparent facsimile
 # --------------------------------------------------------------------------- #
 
 def extract_ink_rgba(bgr: np.ndarray, p: Params) -> np.ndarray:
     """
-    Isolate the ink and return an RGBA image (uint8, channels R,G,B,A) with a
-    fully transparent background. Ink darkness becomes alpha, so fading and
-    ambiguous marks are preserved as partial transparency -- nothing is forced,
-    nothing is invented.
+    Isolate the ink and return an RGBA image (uint8, channels R,G,B,A) on a
+    fully transparent background. Nothing is recognised, reconstructed or
+    invented -- only ink that is physically present is kept.
+
+    Method (all deterministic), tuned against real papyrus photos:
+      1. Background-normalise the CIELAB lightness so uneven lighting, the dark
+         frayed edges and the papyrus fibre tone are flattened out.
+      2. Local adaptive threshold -> a clean ink mask that ignores gradual
+         darkening (edges / fold) and keeps only locally-dark strokes.
+      3. Brown-rejection chroma gate: carbon ink is near-neutral, papyrus fibre
+         is brown, so fade out the browner pixels. Faded/brown ink survives as
+         partial transparency rather than being dropped or forced solid.
+      4. Despeckle stray fibre flecks (real strokes are far larger).
     """
     img = _apply_crop(bgr, p)
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+    L = lab[:, :, 0]
 
-    # Work in CIELAB lightness: ink is darker than papyrus regardless of hue.
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    L = lab[:, :, 0].astype(np.float32)
+    # Auto-scale pixel-sized parameters by the cropped leaf width (a proxy for
+    # letter size) against a ~1000px reference, so the same defaults work at any
+    # resolution -- a bigger photo of a similar leaf gets proportionally bigger
+    # kernels.
+    scale = max(0.25, img.shape[1] / 1000.0)
 
-    # Background = papyrus lightness with the ink "closed" away.
-    k = _odd(p.bg_kernel, lo=9)
+    # 1. Background-normalise lightness (close ink away, then divide).
+    k = _odd(round(p.bg_kernel * scale), lo=9)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-    bg = cv2.morphologyEx(lab[:, :, 0], cv2.MORPH_CLOSE, kernel)
-    bg = cv2.GaussianBlur(bg, (0, 0), max(1.0, k / 3.0)).astype(np.float32) + 1e-3
+    bg = cv2.morphologyEx(L.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+    bg = bg.astype(np.float32) + 1e-3
+    norm = np.clip(L / bg * 255.0, 0, 255).astype(np.uint8)
 
-    # How much darker than the local papyrus each pixel is (0..1).
-    ink_frac = np.clip((bg - L) / bg, 0.0, 1.0)
+    # 2. Local adaptive threshold -> ink mask (1.0 where ink).
+    mask = cv2.adaptiveThreshold(norm, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                 cv2.THRESH_BINARY_INV,
+                                 _odd(round(p.block_size * scale), 3),
+                                 int(p.C)).astype(np.float32) / 255.0
 
-    # Soft ramp: below the floor -> transparent (papyrus texture); above it,
-    # ramp up gently so faint ink stays translucent.
-    floor = float(p.ink_floor)
-    gain = max(0.1, float(p.ink_gain))
-    alpha = np.clip((ink_frac - floor) * gain, 0.0, 1.0)
-    alpha8 = (alpha * 255.0).astype(np.uint8)
+    # 3. Brown-rejection (optional): fade out pixels browner than the gate.
+    if p.chroma_gate and p.chroma_gate > 0:
+        chroma = np.hypot(lab[:, :, 1] - 128.0, lab[:, :, 2] - 128.0)
+        c_lo = float(p.chroma_gate)
+        c_hi = c_lo + max(0.1, float(p.chroma_soft))
+        mask = mask * np.clip((c_hi - chroma) / (c_hi - c_lo), 0.0, 1.0)
+    alpha = mask
 
+    # 4. Despeckle fibre flecks (area scales with resolution).
     if p.min_blob and p.min_blob > 0:
-        alpha8 = _despeckle_alpha(alpha8, p.min_blob)
+        binar = (alpha > 0.25).astype(np.uint8)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(binar, 8)
+        keep = np.ones(n, dtype=bool)
+        keep[0] = False
+        min_area = int(p.min_blob * scale * scale)
+        for i in range(1, n):
+            if stats[i, cv2.CC_STAT_AREA] < min_area:
+                keep[i] = False
+        alpha = alpha * keep[labels]
 
-    # Ink colour.
-    mode = (p.ink_color or "original").lower()
+    # Light feather so stroke edges are not jagged, then to 0..255.
+    alpha8 = cv2.GaussianBlur((alpha * 255.0).astype(np.uint8), (0, 0),
+                              max(0.4, 0.6 * scale))
+
+    # Ink colour (fading carried by alpha).
+    mode = (p.ink_color or "black").lower()
     if mode == "original":
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     elif mode == "sepia":

@@ -8,7 +8,7 @@ let activeTab = "original";
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
-const SLIDERS = ["bg_kernel", "ink_floor", "ink_gain", "min_blob", "cm"];
+const SLIDERS = ["bg_kernel", "C", "block_size", "min_blob", "chroma_gate", "cm"];
 
 window.addEventListener("DOMContentLoaded", () => {
   bindSlots();
@@ -48,13 +48,12 @@ async function checkHealth() {
 function bindControls() {
   SLIDERS.forEach((id) => {
     const el = $("#" + id), out = $("#" + id + "-out");
-    const sync = () => { if (out) out.textContent = (id === "ink_floor") ? facfmt(el.value) : el.value; };
+    const sync = () => { if (out) out.textContent = el.value; };
     el.addEventListener("input", () => { sync(); if (id === "cm") updateDpi(); maybeLive(); });
     sync();
   });
   updateDpi();
 }
-function facfmt(v) { return Number(v).toFixed(2); }
 
 function widthPx() {
   const s = cur(); if (!s) return 0;
@@ -76,8 +75,9 @@ function collectParams() {
   const s = cur();
   const p = {
     bg_kernel: +$("#bg_kernel").value,
-    ink_floor: +$("#ink_floor").value,
-    ink_gain: +$("#ink_gain").value,
+    C: +$("#C").value,
+    block_size: +$("#block_size").value,
+    chroma_gate: +$("#chroma_gate").value,
     ink_color: $("#ink_color").value,
     min_blob: +$("#min_blob").value,
     dpi: computeDpi(),

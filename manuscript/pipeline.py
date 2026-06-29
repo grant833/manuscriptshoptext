@@ -58,7 +58,11 @@ class Params:
     ink_color: str = "black"
     # Remove isolated ink specks smaller than this many pixels (at a 2150px-wide
     # leaf reference, auto-scaled). Clears papyrus-fibre flecks.
-    min_blob: int = 150
+    min_blob: int = 250
+    # Fibre removal: drop connected components whose stroke is thinner than this
+    # many pixels everywhere (real letter strokes are thick; papyrus fibres are
+    # thin lines). At the 2150px leaf reference, auto-scaled. 0 = off.
+    min_thick: float = 9.0
 
     # --- Output scale ------------------------------------------------------ #
     # DPI to embed so the PNG/SVG prints at the correct physical size. 0 = unset.
@@ -202,14 +206,22 @@ def _ink_alpha(bgr: np.ndarray, p: Params):
     seeded[0] = False
     mask = np.where(seeded[lbl], 255, 0).astype(np.uint8)
 
-    # Despeckle fibre flecks (area scales with resolution).
-    if p.min_blob and p.min_blob > 0:
+    # Despeckle (area) + fibre removal (thin strokes), both shape-based.
+    min_area = int(p.min_blob * scale * scale) if p.min_blob else 0
+    min_thick = p.min_thick * scale if p.min_thick else 0
+    if min_area or min_thick:
         n, lbl, st, _ = cv2.connectedComponentsWithStats(mask, 8)
         keep = np.ones(n, dtype=bool)
         keep[0] = False
-        min_area = int(p.min_blob * scale * scale)
+        # Max stroke thickness per component = 2 * max distance-to-edge inside it.
+        if min_thick:
+            dt = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+            maxd = np.zeros(n, dtype=np.float32)
+            np.maximum.at(maxd, lbl.ravel(), dt.ravel())
         for i in range(1, n):
-            if st[i, cv2.CC_STAT_AREA] < min_area:
+            if min_area and st[i, cv2.CC_STAT_AREA] < min_area:
+                keep[i] = False
+            elif min_thick and 2 * maxd[i] < min_thick:
                 keep[i] = False
         mask = np.where(keep[lbl], 255, 0).astype(np.uint8)
 

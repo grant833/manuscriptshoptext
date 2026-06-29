@@ -8,7 +8,7 @@ let activeTab = "original";
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
-const SLIDERS = ["k_weak", "edge_trim", "min_blob", "cm"];
+const SLIDERS = ["k_weak", "edge_trim", "min_blob", "min_thick", "cm"];
 
 window.addEventListener("DOMContentLoaded", () => {
   bindSlots();
@@ -78,6 +78,7 @@ function collectParams() {
     k_weak: +$("#k_weak").value,
     edge_trim: +$("#edge_trim").value,
     min_blob: +$("#min_blob").value,
+    min_thick: +$("#min_thick").value,
     ink_color: $("#ink_color").value,
     min_blob: +$("#min_blob").value,
     dpi: computeDpi(),

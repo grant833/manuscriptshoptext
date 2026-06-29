@@ -52,8 +52,12 @@
       <label>Edge trim <output id="edge_trim-out">0.012</output>
         <input type="range" id="edge_trim" min="0" max="0.05" step="0.002" value="0.012"></label>
       <p class="hint">Pulls in from the ragged leaf edge to drop frayed fibres.</p>
-      <label>Despeckle min blob (px) <output id="min_blob-out">150</output>
-        <input type="range" id="min_blob" min="0" max="600" step="10" value="150"></label>
+      <label>Despeckle min blob (px) <output id="min_blob-out">250</output>
+        <input type="range" id="min_blob" min="0" max="800" step="10" value="250"></label>
+      <label>Fibre removal (min stroke px) <output id="min_thick-out">9</output>
+        <input type="range" id="min_thick" min="0" max="20" step="1" value="9"></label>
+      <p class="hint">Removes thin papyrus fibres (real strokes are thick).
+         Leftover noise fused to letters is wiped in the editor.</p>
       <label>Ink colour
         <select id="ink_color">
           <option value="black" selected>Black</option>

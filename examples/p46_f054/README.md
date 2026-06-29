@@ -1,8 +1,10 @@
 # Example facsimiles — P46 folio 54 (1 Corinthians)
 
-Produced automatically by the improved pipeline (leaf-interior mask + hysteresis
-Sauvola) from the raw museum photographs, with a hand-picked crop per leaf.
-Only the real ink is kept; nothing is recognised or invented.
+Produced automatically by the **ML clean** denoiser from the raw museum
+photographs, with a hand-picked crop per leaf. Only the real ink is kept;
+nothing is recognised or invented. The recto (ρδ) is close to the hand-traced
+target; the verso (ρε) is rougher (faint ink + vertical fibres) and is the case
+the GPU-trained model is meant to fix -- see `docs/GPU_TRAINING.md`.
 
 | File | Side | Content |
 |------|------|---------|

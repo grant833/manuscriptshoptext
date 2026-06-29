@@ -23,6 +23,12 @@ is physically present:
 An optional Tesseract OCR draft exists purely as a typing aid; it is clearly
 labelled **UNVERIFIED**, never trusted, and disabled if the engine is absent.
 
+## Guides
+
+- **[GETTING_STARTED.md](GETTING_STARTED.md)** — plain-language setup + workflow.
+- **[docs/GPU_TRAINING.md](docs/GPU_TRAINING.md)** — train the verso model on a GPU
+  from the editor's collected pairs.
+
 ## Quick start
 
 ```bash

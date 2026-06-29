@@ -14,3 +14,9 @@ samples/
 
 # OS
 .DS_Store
+
+# Drop-folder runtime data
+inbox/*
+outbox/*
+!inbox/.gitkeep
+!outbox/.gitkeep

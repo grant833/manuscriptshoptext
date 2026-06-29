@@ -49,9 +49,9 @@ class Params:
     # Contrast of the alpha ramp above the floor. Higher = ink becomes opaque
     # sooner (less translucency); lower = gentler fading preserved.
     ink_gain: float = 4.0
-    # Colour of the rendered ink: "original" (sampled from the photo, maximally
-    # faithful), "black", or "sepia" (a dark brown).
-    ink_color: str = "original"
+    # Colour of the rendered ink: "black" (default), "original" (sampled from the
+    # photo), or "sepia" (a dark brown). Fading is carried by the alpha channel.
+    ink_color: str = "black"
     # Remove isolated ink specks smaller than this many pixels (0 = keep all).
     # OFF by default so faint / broken strokes are never silently erased.
     min_blob: int = 0
@@ -216,6 +216,20 @@ def process(bgr: np.ndarray, p: Params) -> np.ndarray:
         out = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                     cv2.THRESH_BINARY, _odd(p.block_size, 3), int(p.C))
     return out
+
+
+def auto_params(bgr: np.ndarray) -> Params:
+    """
+    Hands-off defaults for unattended processing: best-effort auto-crop to the
+    leaf plus the standard ink-extraction settings. Used by the drop-folder
+    watcher so front/back images can be processed with no interaction.
+    """
+    p = Params(ink_color="black")
+    bbox = detect_manuscript_bbox(bgr)
+    if bbox:
+        p.crop_x, p.crop_y = bbox["x"], bbox["y"]
+        p.crop_w, p.crop_h = bbox["w"], bbox["h"]
+    return p
 
 
 def encode_png(img: np.ndarray) -> bytes:

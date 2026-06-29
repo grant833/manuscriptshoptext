@@ -63,6 +63,23 @@ python app.py
    - *Vector (SVG)* — the ink traced into scalable vector paths (via `potrace`),
      transparent background; same idea as an Illustrator image-trace.
 
+## ML denoiser (experimental, no text generation)
+
+Classical thresholding gets the letters right but can't remove papyrus
+fibre-noise without harming the writing (fibres and the thin parts of letters
+are indistinguishable to a filter). `manuscript/denoiser.py` learns to separate
+them with a **per-pixel ink/not-ink classifier** — it is *not* generative, so it
+can never invent or reconstruct a letter; it only cleans.
+
+Training data is **synthetic** (which sidesteps the fact that hand-traced
+facsimiles don't pixel-align to photos): clean ink shapes are composited onto
+**real papyrus fibre texture** (a photo with its ink inpainted out), giving
+perfectly-labelled noisy→clean pairs. The classifier learns to reject fibre and
+keep ink, then runs on the real photo. In testing it removed most inter-line
+fibre noise while leaving letters intact — far closer to a hand-traced target
+than any deterministic method. It improves with more (clean facsimile + raw
+photo) examples to train on.
+
 ## Cleanup editor (hybrid)
 
 Automatic extraction gets the letters but can't fully remove papyrus

@@ -9,3 +9,8 @@ pytesseract>=0.3.10
 
 # Optional system binary for SVG vector export (no pip package needed):
 #   apt-get install -y potrace
+
+# Optional: discriminative ink/fibre denoiser (manuscript/denoiser.py). It is a
+# per-pixel ink/not-ink classifier (no text generation), trained on synthetic
+# data. Only needed if you use the ML cleanup.
+scikit-learn>=1.3

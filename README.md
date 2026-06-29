@@ -57,10 +57,24 @@ python app.py
 4. **Print scale** — enter the leaf's real width (read it off the photo's ruler)
    so the PNG embeds the correct DPI and prints at true 1:1 size.
 5. **Run both (automatic)** processes front + back, or *Process side* for one.
-6. **Download** — a transparent-background facsimile per side:
+6. **Edit & clean** (on the Facsimile tab) opens the cleanup editor — see below.
+7. **Download** — a transparent-background facsimile per side:
    - *Facsimile (PNG)* — raster, transparent background.
    - *Vector (SVG)* — the ink traced into scalable vector paths (via `potrace`),
      transparent background; same idea as an Illustrator image-trace.
+
+## Cleanup editor (hybrid)
+
+Automatic extraction gets the letters but can't fully remove papyrus
+fibre-noise without harming the writing. The editor closes that gap by hand,
+the way the reference facsimiles were made — only much faster:
+
+- The auto-extracted **ink mask** is shown over the **photo** (opacity
+  adjustable) as a tracing reference.
+- **Zoom** in as far as you like (wheel), **pan** (space-drag).
+- **Brush** completes faded letters; **Eraser** wipes fibre noise / stray marks.
+- Export **Text PNG** (filled letters, transparent background) and **Outline
+  SVG** (letter contours only — `fill:none; stroke` — no fill).
 
 ## Output
 

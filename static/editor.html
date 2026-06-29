@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manuscript Cleanup Editor</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  #ed-main { display: grid; grid-template-columns: 240px 1fr; height: calc(100vh - 53px); }
+  #ed-tools { background: var(--panel); border-right: 1px solid var(--line); padding: 14px; overflow-y: auto; }
+  #ed-tools h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 8px; }
+  .toolbtn { display: block; width: 100%; text-align: left; margin: 4px 0; }
+  .toolbtn.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  #ed-tools label { display:block; font-size: 13px; margin: 10px 0 4px; }
+  #ed-tools input[type=range] { width: 100%; accent-color: var(--accent); }
+  #ed-stage { position: relative; overflow: hidden; background:
+    repeating-conic-gradient(#cfcfcf 0% 25%, #9a9a9a 0% 50%) 50% / 22px 22px; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+  .kbd { color: var(--muted); font-size: 11px; }
+  .divider { border-top: 1px solid var(--line); margin: 12px 0; }
+  #status { font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cleanup Editor <span class="kbd">— brush to complete letters, eraser to wipe fibre noise</span></h1>
+  <div class="header-actions">
+    <a class="btn" href="/">← Back to workspace</a>
+  </div>
+</header>
+
+<div id="ed-main">
+  <aside id="ed-tools">
+    <h2>Tools</h2>
+    <button class="toolbtn active" data-tool="brush" id="tool-brush">✎ Brush (B) — add ink</button>
+    <button class="toolbtn" data-tool="eraser" id="tool-eraser">⌫ Eraser (E) — remove</button>
+    <button class="toolbtn" data-tool="pan" id="tool-pan">✋ Pan (space)</button>
+
+    <label>Brush size <output id="size-out">14</output></label>
+    <input type="range" id="size" min="1" max="120" step="1" value="14">
+
+    <div class="divider"></div>
+    <h2>View</h2>
+    <label><input type="checkbox" id="show-photo" checked> Show photo underneath</label>
+    <label>Photo opacity <output id="opac-out">0.55</output></label>
+    <input type="range" id="opac" min="0" max="1" step="0.05" value="0.55">
+    <div class="btn-row" style="margin-top:8px">
+      <button id="fit">Fit</button>
+      <button id="undo">↶ Undo (Z)</button>
+    </div>
+    <p class="kbd" style="margin-top:6px">Wheel = zoom · drag = paint · space+drag or middle-drag = pan</p>
+
+    <div class="divider"></div>
+    <h2>Export</h2>
+    <button class="toolbtn" id="export-png">⬇ Text PNG (filled)</button>
+    <button class="toolbtn" id="export-svg">⬇ Outline SVG</button>
+    <div id="status"></div>
+  </aside>
+
+  <div id="ed-stage">
+    <canvas id="view"></canvas>
+  </div>
+</div>
+
+<script src="/static/editor.js"></script>
+</body>
+</html>

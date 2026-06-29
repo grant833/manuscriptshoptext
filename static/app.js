@@ -21,6 +21,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#run-both").addEventListener("click", runBoth);
   $("#ocr").addEventListener("click", runOcr);
   $("#ink_color").addEventListener("change", maybeLive);
+  $("#edit-clean").addEventListener("click", openEditor);
   checkHealth();
 });
 
@@ -156,6 +157,8 @@ async function renderTab(name, force) {
   showStage(name);
   const s = cur();
   const dl = $("#download");
+  // "Edit & clean" applies to the facsimile result.
+  $("#edit-clean").hidden = !(s && name === "facsimile");
   if (name === "original") { dl.hidden = true; renderCrop(); return; }
   if (!s) return;
   if (name === "facsimile") {
@@ -170,6 +173,14 @@ async function renderTab(name, force) {
     dl.hidden = true;
     await runPreview();
   }
+}
+
+async function openEditor() {
+  const s = cur(); if (!s) return;
+  // Make sure the facsimile + cropped reference are generated/cached first.
+  if (!s.facsimileReady) await runFacsimile(true);
+  const dpi = computeDpi();
+  window.open(`/editor?id=${s.id}${dpi ? "&dpi=" + dpi : ""}`, "_blank");
 }
 
 async function runSvg(force) {

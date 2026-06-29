@@ -250,30 +250,26 @@ def svg_available() -> bool:
     return shutil.which("potrace") is not None
 
 
-def extract_ink_svg(bgr: np.ndarray, p: Params) -> str:
+def trace_mask_svg(mask_ink: np.ndarray, *, ink_color: str = "black",
+                   outline: bool = False, dpi: int = 0) -> str:
     """
-    Trace the isolated ink into a scalable SVG of vector paths on a transparent
-    background (the same kind of output as a hand Illustrator image-trace). The
-    ink mask comes from the exact same deterministic extraction as the PNG, so
-    nothing is invented; potrace only smooths the existing shapes into curves.
+    Trace a binary ink mask (uint8, 255 = ink) into an SVG via potrace.
 
-    Requires the `potrace` binary. Raises RuntimeError if it is missing.
+    outline=False -> solid filled shapes (the 'Text' style).
+    outline=True  -> letter contours only, no fill (the 'SVG' style: the same
+                     fill:none;stroke look as the hand-traced reference).
     """
     if not svg_available():
         raise RuntimeError("SVG tracer 'potrace' is not installed")
-
-    img, alpha8 = _ink_alpha(bgr, p)
-    h, w = alpha8.shape[:2]
-    # Bitmap for potrace: ink = black (0), background = white (255).
-    mask = np.where(alpha8 >= int(p.svg_threshold), 0, 255).astype(np.uint8)
+    h, w = mask_ink.shape[:2]
+    bitmap = np.where(mask_ink >= 128, 0, 255).astype(np.uint8)  # ink -> black
 
     tmp = tempfile.mkdtemp(prefix="msvg_")
     try:
         pbm = os.path.join(tmp, "mask.pbm")
         out = os.path.join(tmp, "trace.svg")
-        # PBM P4 (1-bit). 0 -> ink (black foreground for potrace).
         from PIL import Image
-        Image.fromarray(mask, "L").convert("1").save(pbm)
+        Image.fromarray(bitmap, "L").convert("1").save(pbm)
         subprocess.run(
             ["potrace", pbm, "-s", "-t", "4", "-a", "1.2", "-O", "0.2", "-o", out],
             check=True, capture_output=True)
@@ -281,16 +277,27 @@ def extract_ink_svg(bgr: np.ndarray, p: Params) -> str:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    fill = _INK_HEX.get((p.ink_color or "black").lower(), "#000000")
-    svg = svg.replace('fill="#000000"', f'fill="{fill}"')
+    fill = _INK_HEX.get((ink_color or "black").lower(), "#000000")
+    if outline:
+        # stroke width ~ 0.05% of width so it reads as a thin contour line
+        sw = max(1.0, round(w * 0.0005, 2))
+        svg = svg.replace('fill="#000000"',
+                          f'fill="none" stroke="{fill}" stroke-width="{sw}"')
+    else:
+        svg = svg.replace('fill="#000000"', f'fill="{fill}"')
 
-    # Size for true 1:1 printing when a DPI is known; else leave potrace's units.
-    if p.dpi and p.dpi > 0:
-        win = w / float(p.dpi)
-        hin = h / float(p.dpi)
+    if dpi and dpi > 0:
         svg = re.sub(r'width="[^"]*"\s+height="[^"]*"',
-                     f'width="{win:.4f}in" height="{hin:.4f}in"', svg, count=1)
+                     f'width="{w/float(dpi):.4f}in" height="{h/float(dpi):.4f}in"',
+                     svg, count=1)
     return svg
+
+
+def extract_ink_svg(bgr: np.ndarray, p: Params, outline: bool = False) -> str:
+    """Trace the isolated ink straight from a photo (filled, or outline-only)."""
+    _, alpha8 = _ink_alpha(bgr, p)
+    mask = (alpha8 >= int(p.svg_threshold)).astype(np.uint8) * 255
+    return trace_mask_svg(mask, ink_color=p.ink_color, outline=outline, dpi=p.dpi)
 
 
 # --------------------------------------------------------------------------- #

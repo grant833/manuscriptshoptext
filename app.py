@@ -33,8 +33,8 @@ from flask import (Flask, jsonify, request, send_file, send_from_directory,
 
 from manuscript import ocr
 from manuscript.pipeline import (Params, process, extract_ink_rgba,
-                                 extract_ink_svg, svg_available,
-                                 detect_manuscript_bbox, encode_png)
+                                 extract_ink_svg, trace_mask_svg, svg_available,
+                                 detect_manuscript_bbox, encode_png, _apply_crop)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 UPLOADS = os.path.join(BASE, "uploads")
@@ -141,12 +141,46 @@ def api_facsimile():
     file_id, bgr, params = _load(request.get_json(force=True))
     rgba = extract_ink_rgba(bgr, params)
     png = _rgba_to_png_bytes(rgba, params.dpi)
-    # cache for download
+    # cache the facsimile + the cropped original (reference layer for the editor)
     with open(os.path.join(OUTPUTS, file_id + "_facsimile.png"), "wb") as fh:
         fh.write(png)
+    cv2.imwrite(os.path.join(OUTPUTS, file_id + "_crop.png"), _apply_crop(bgr, params))
     b64 = base64.b64encode(png).decode("ascii")
     return jsonify({"image": "data:image/png;base64," + b64,
                     "w": int(rgba.shape[1]), "h": int(rgba.shape[0])})
+
+
+@app.get("/editor")
+def editor():
+    return send_from_directory(STATIC, "editor.html")
+
+
+@app.post("/api/vectorize")
+def api_vectorize():
+    """Trace an edited mask PNG (data URL) into SVG. outline=True -> contours."""
+    if not svg_available():
+        return jsonify({"error": "SVG tracer (potrace) not installed"}), 503
+    data = request.get_json(force=True)
+    file_id = data.get("id", "")
+    raw = data.get("png", "")
+    if "," in raw:
+        raw = raw.split(",", 1)[1]
+    try:
+        arr = np.frombuffer(base64.b64decode(raw), np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+        mask = img[:, :, 3] if (img.ndim == 3 and img.shape[2] == 4) else \
+            cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        mask = (mask >= 128).astype(np.uint8) * 255
+        svg = trace_mask_svg(mask, outline=bool(data.get("outline", True)),
+                             dpi=int(data.get("dpi", 0) or 0))
+    except Exception as e:  # pragma: no cover
+        return jsonify({"error": str(e)}), 500
+    if file_id:
+        with open(os.path.join(OUTPUTS, file_id + "_facsimile.svg"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(svg)
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return jsonify({"svg": svg, "image": "data:image/svg+xml;base64," + b64})
 
 
 @app.post("/api/svg")
@@ -211,6 +245,9 @@ def serve_file(kind, file_id):
         p = _upload_path(file_id)
     elif kind == "facsimile":
         p = os.path.join(OUTPUTS, file_id + "_facsimile.png")
+        p = p if os.path.exists(p) else None
+    elif kind == "crop":
+        p = os.path.join(OUTPUTS, file_id + "_crop.png")
         p = p if os.path.exists(p) else None
     else:
         abort(404)

@@ -1,16 +1,19 @@
 # Example facsimiles — P46 folio 54 (1 Corinthians)
 
-Produced automatically by this tool from the raw museum photographs in Google
-Drive (`ManuscriptShop`), with a hand-picked crop per leaf. Black ink isolated
-onto a transparent background; nothing recognised or invented.
+Produced automatically by the improved pipeline (leaf-interior mask + hysteresis
+Sauvola) from the raw museum photographs, with a hand-picked crop per leaf.
+Only the real ink is kept; nothing is recognised or invented.
 
 | File | Side | Content |
 |------|------|---------|
-| `P46_f054r_1Cor_12.24-13.1_facsimile.png` / `.svg` | recto (front) | 1 Cor 12.24–13.1 |
-| `P46_f054v_1Cor_13.2-11_facsimile.png`   / `.svg` | verso (back)  | 1 Cor 13.2–11 |
+| `P46_f054r_1Cor_12.24-13.1_text.png` / `_outline.svg` | recto (front) | 1 Cor 12.24–13.1 |
+| `P46_f054v_1Cor_13.2-11_text.png`   / `_outline.svg` | verso (back)  | 1 Cor 13.2–11 |
 
-- **PNG** — transparent-background raster facsimile.
-- **SVG** — scalable vector trace (smooth paths, transparent background).
+- **`_text.png`** — filled black letters on a transparent background (the "text" file).
+- **`_outline.svg`** — letter **contours only**, no fill (`fill:none; stroke`),
+  scalable vector — the "outline" file.
 
-Known limitation: frayed papyrus edge-fibres still appear around the perimeter;
-a tighter crop or the planned edge-trim step removes them.
+These are **automatic** output. Faded ink and papyrus fibre-noise are still
+imperfect, especially on the verso. Final hand-trace-quality cleanup is done in
+the in-app **cleanup editor** (brush to complete letters, eraser to wipe fibre
+noise), which isn't reflected in these auto files.

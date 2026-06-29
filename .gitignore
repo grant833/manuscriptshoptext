@@ -20,3 +20,6 @@ inbox/*
 outbox/*
 !inbox/.gitkeep
 !outbox/.gitkeep
+
+# Experimental deep-learning model (train locally; needs GPU + aligned data)
+models/*.pt

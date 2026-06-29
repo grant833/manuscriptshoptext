@@ -3,32 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Manuscript Text Workspace</title>
+<title>Manuscript Facsimile Workspace</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header>
-  <h1>Manuscript Text Workspace</h1>
+  <h1>Manuscript Facsimile Workspace</h1>
   <div class="header-actions">
-    <span id="ocr-status" class="pill pill-muted">checking OCR…</span>
-    <label class="file-btn">
-      Upload image
-      <input type="file" id="file-input" accept="image/*" hidden>
-    </label>
+    <span id="ocr-status" class="pill pill-muted">checking…</span>
+    <button id="run-both" class="primary" disabled>▶ Run both (automatic)</button>
   </div>
 </header>
 
 <main>
   <!-- ---------------- Controls ---------------- -->
   <aside id="controls">
-    <h2>Cleaning controls</h2>
-    <p class="hint">Deterministic image processing — no AI. Lost or broken ink
-       stays blank, so damage shows exactly as it is.</p>
+    <section class="block">
+      <h2>Manuscript sides</h2>
+      <p class="hint">Upload the front and back. The tool isolates the surviving
+         ink and outputs it on a transparent background — nothing invented.</p>
+      <div class="side-slot" data-side="front">
+        <label class="file-btn">Front… <input type="file" accept="image/*" hidden></label>
+        <span class="slot-status">empty</span>
+      </div>
+      <div class="side-slot" data-side="back">
+        <label class="file-btn">Back… <input type="file" accept="image/*" hidden></label>
+        <span class="slot-status">empty</span>
+      </div>
+    </section>
 
     <fieldset>
       <legend>Crop to leaf</legend>
-      <p class="hint">Drag a box on the <b>Original</b> image to exclude the mat
-         and colour card.</p>
+      <p class="hint">Drag a box on the <b>Original</b> view to drop the mat and
+         colour card. Auto-detect is a starting guess.</p>
       <div class="btn-row">
         <button id="auto-crop">Auto-detect</button>
         <button id="reset-crop">Reset</button>
@@ -37,95 +44,83 @@
     </fieldset>
 
     <fieldset>
-      <legend>Background</legend>
-      <label class="check"><input type="checkbox" id="flatten" checked>
-        Flatten lighting / fibre tone</label>
-      <label>Background kernel <output id="bg_kernel-out">41</output>
-        <input type="range" id="bg_kernel" min="5" max="151" step="2" value="41"></label>
+      <legend>Background removal</legend>
+      <label>Background scale <output id="bg_kernel-out">51</output>
+        <input type="range" id="bg_kernel" min="9" max="201" step="2" value="51"></label>
+      <p class="hint">Larger copes with bigger lighting gradients across the leaf.</p>
     </fieldset>
 
     <fieldset>
-      <legend>Contrast</legend>
-      <label class="check"><input type="checkbox" id="clahe" checked>
-        Local contrast (CLAHE)</label>
-      <label>Clip limit <output id="clahe_clip-out">2.0</output>
-        <input type="range" id="clahe_clip" min="0.5" max="8" step="0.5" value="2"></label>
-    </fieldset>
-
-    <fieldset>
-      <legend>Threshold</legend>
-      <label>Method
-        <select id="threshold">
-          <option value="adaptive" selected>Adaptive (recommended)</option>
-          <option value="otsu">Otsu (global auto)</option>
-          <option value="manual">Manual cutoff</option>
+      <legend>Ink</legend>
+      <label>Floor (drop papyrus texture) <output id="ink_floor-out">0.10</output>
+        <input type="range" id="ink_floor" min="0" max="0.5" step="0.01" value="0.10"></label>
+      <label>Gain (fading ramp) <output id="ink_gain-out">4.0</output>
+        <input type="range" id="ink_gain" min="1" max="12" step="0.5" value="4"></label>
+      <label>Ink colour
+        <select id="ink_color">
+          <option value="original" selected>Original (most faithful)</option>
+          <option value="black">Black</option>
+          <option value="sepia">Sepia (dark brown)</option>
         </select></label>
-      <div data-when="adaptive">
-        <label>Window <output id="block_size-out">31</output>
-          <input type="range" id="block_size" min="3" max="151" step="2" value="31"></label>
-        <label>Sensitivity (C) <output id="C-out">15</output>
-          <input type="range" id="C" min="0" max="40" step="1" value="15"></label>
-      </div>
-      <div data-when="manual" hidden>
-        <label>Cutoff <output id="manual_thresh-out">127</output>
-          <input type="range" id="manual_thresh" min="0" max="255" step="1" value="127"></label>
-      </div>
+      <label>Despeckle min blob (px) <output id="min_blob-out">0</output>
+        <input type="range" id="min_blob" min="0" max="80" step="1" value="0"></label>
+      <p class="hint">Floor low + despeckle off = faint / broken strokes kept.</p>
     </fieldset>
 
     <fieldset>
-      <legend>Despeckle</legend>
-      <p class="hint">Off by default so faint strokes are never erased.</p>
-      <label>Min ink blob (px) <output id="min_blob-out">0</output>
-        <input type="range" id="min_blob" min="0" max="60" step="1" value="0"></label>
+      <legend>Print scale (1:1)</legend>
+      <label>Physical width of crop (cm) <output id="cm-out">—</output>
+        <input type="range" id="cm" min="0" max="40" step="0.1" value="0"></label>
+      <div class="readout">Embedded DPI: <span id="dpi-readout">unset</span></div>
+      <p class="hint">Set the real width (read it off the photo's ruler) so the
+         PNG prints at true size. 0 = leave DPI unset.</p>
     </fieldset>
 
     <div class="btn-row sticky-actions">
       <label class="check"><input type="checkbox" id="live" checked> Live</label>
-      <button id="process" class="primary">Process</button>
+      <button id="process" class="primary">Process side</button>
     </div>
+
+    <details class="block">
+      <summary>Optional: OCR draft (unverified)</summary>
+      <p class="hint">A rough, error-prone draft from Tesseract — never trusted
+         output, just a typing aid. Disabled if the engine isn't installed.</p>
+      <div class="btn-row"><button id="ocr" disabled>Get OCR draft</button></div>
+      <textarea id="text" spellcheck="false" placeholder="OCR draft appears here…"></textarea>
+    </details>
   </aside>
 
-  <!-- ---------------- Image viewer ---------------- -->
+  <!-- ---------------- Viewer ---------------- -->
   <section id="viewer">
-    <div class="tabs">
-      <button class="tab active" data-tab="original">Original</button>
-      <button class="tab" data-tab="cleaned">Cleaned</button>
+    <div class="viewer-bar">
+      <div class="side-switch">
+        <button class="side-tab active" data-side="front" disabled>Front</button>
+        <button class="side-tab" data-side="back" disabled>Back</button>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-tab="original">Original</button>
+        <button class="tab" data-tab="facsimile">Facsimile</button>
+        <button class="tab" data-tab="preview">B&amp;W preview</button>
+      </div>
+      <div class="viewer-actions">
+        <span id="dims" class="readout"></span>
+        <a id="download" class="btn" href="#" hidden>⬇ Download PNG</a>
+      </div>
     </div>
+
     <div class="stage" id="stage-original">
       <div id="image-wrap">
         <img id="img-original" alt="">
         <div id="crop-box" hidden></div>
       </div>
-      <p class="placeholder" id="placeholder">Upload a manuscript image to begin.</p>
+      <p class="placeholder" id="placeholder">Upload a front or back image to begin.</p>
     </div>
-    <div class="stage" id="stage-cleaned" hidden>
-      <img id="img-cleaned" alt="">
+    <div class="stage checker" id="stage-facsimile" hidden>
+      <img id="img-facsimile" alt="">
     </div>
-  </section>
-
-  <!-- ---------------- Transcription ---------------- -->
-  <section id="transcribe">
-    <h2>Transcription</h2>
-    <p class="hint">Type exactly what you see. Use the markers for damaged or
-       uncertain text (standard Leiden conventions).</p>
-    <div class="marker-bar">
-      <button data-wrap="[|]" title="Lost text restored by editor">[ ]</button>
-      <button data-ins="̣" title="Dot under previous letter = uncertain reading">◌̣</button>
-      <button data-wrap="(|)" title="Expansion of an abbreviation">( )</button>
-      <button data-wrap="⟦|⟧" title="Deletion by the scribe">⟦ ⟧</button>
-      <button data-ins="[ -ca. -]" title="Lacuna of estimated length">lacuna</button>
-      <button data-ins="̅" title="Overline (nomen sacrum) over previous letter">◌̅</button>
+    <div class="stage dark" id="stage-preview" hidden>
+      <img id="img-preview" alt="">
     </div>
-    <textarea id="text" spellcheck="false"
-      placeholder="The surviving text, transcribed faithfully…"></textarea>
-    <div class="btn-row">
-      <button id="ocr" disabled>OCR draft</button>
-      <button id="save" class="primary">Save</button>
-      <a id="download" href="#" hidden>Download .txt</a>
-      <span id="save-status" class="readout"></span>
-    </div>
-    <p class="hint" id="ocr-note" hidden>OCR draft is an <b>unverified</b>,
-       error-prone starting point — correct it against the image.</p>
   </section>
 </main>
 

@@ -1,14 +1,19 @@
 """
-Deterministic manuscript image-cleaning pipeline.
+Deterministic manuscript image pipeline.
 
-NO machine learning, NO text generation. Every step here is a classic,
-reproducible image-processing operation. Where ink is lost or broken on the
-papyrus, the output simply stays blank in that spot -- damage is shown exactly
-as it is, never "filled in".
+NO machine learning, NO text recognition, NO text generation. Every step is a
+classic, reproducible image-processing operation. We never invent, reconstruct,
+or "improve" anything -- we only isolate the ink that is physically present on
+the papyrus.
 
-The pipeline turns a photograph of a manuscript leaf into a faithful
-black-on-white rendering of the surviving ink, which can then be transcribed by
-a human in the workspace UI.
+Primary output (`extract_ink_rgba`): a faithful FACSIMILE of the surviving ink,
+floating on a fully transparent background, ready to be printed 1:1 onto blank
+papyrus. Fading, broken strokes, smudges and gaps are preserved because ink is
+carried as a *soft* alpha channel -- faint ink stays faintly transparent rather
+than being forced to solid black. Where there is no ink, the output is empty.
+
+Secondary output (`process`): a flat black-on-white preview, useful for eyeing
+contrast while tuning.
 """
 
 from __future__ import annotations
@@ -26,31 +31,42 @@ import numpy as np
 
 @dataclass
 class Params:
-    """All tunable knobs. Sensible defaults aim at brown-papyrus majuscules."""
+    """All tunable knobs. Defaults aim at brown-papyrus majuscule hands."""
 
-    # Crop to the manuscript region (pixels in the ORIGINAL image). None => no crop.
+    # Crop to the manuscript region (pixels in the ORIGINAL image). None => none.
     crop_x: Optional[int] = None
     crop_y: Optional[int] = None
     crop_w: Optional[int] = None
     crop_h: Optional[int] = None
 
-    # Background flattening (removes uneven lighting / papyrus fibre tone).
-    flatten: bool = True
-    bg_kernel: int = 41          # size of the morphological background estimate
+    # --- Ink extraction (transparent facsimile) ---------------------------- #
+    # Size of the morphological background estimate (removes ink to reveal the
+    # bare papyrus tone). Larger = copes with bigger lighting gradients.
+    bg_kernel: int = 51
+    # Ink that is darker than the local background by less than this fraction is
+    # treated as papyrus texture and dropped. Keep LOW to preserve faint ink.
+    ink_floor: float = 0.10
+    # Contrast of the alpha ramp above the floor. Higher = ink becomes opaque
+    # sooner (less translucency); lower = gentler fading preserved.
+    ink_gain: float = 4.0
+    # Colour of the rendered ink: "original" (sampled from the photo, maximally
+    # faithful), "black", or "sepia" (a dark brown).
+    ink_color: str = "original"
+    # Remove isolated ink specks smaller than this many pixels (0 = keep all).
+    # OFF by default so faint / broken strokes are never silently erased.
+    min_blob: int = 0
 
-    # Local contrast boost (CLAHE).
+    # --- Output scale ------------------------------------------------------ #
+    # DPI to embed so the PNG prints at the correct physical size. 0 = unset.
+    dpi: int = 0
+
+    # --- Binary preview only ('process') ----------------------------------- #
     clahe: bool = True
     clahe_clip: float = 2.0
-
-    # Thresholding: "adaptive" | "otsu" | "manual"
     threshold: str = "adaptive"
-    block_size: int = 31         # adaptive: odd window size
-    C: int = 15                  # adaptive: subtracted constant
-    manual_thresh: int = 127     # manual: 0-255 cutoff
-
-    # Despeckle: drop ink blobs smaller than this many pixels. 0 = keep everything.
-    # Kept OFF by default so faint / broken strokes are never silently erased.
-    min_blob: int = 0
+    block_size: int = 31
+    C: int = 15
+    manual_thresh: int = 127
 
     @staticmethod
     def from_dict(d: dict) -> "Params":
@@ -69,120 +85,137 @@ class Params:
 # --------------------------------------------------------------------------- #
 
 def _odd(n: int, lo: int = 3) -> int:
-    """Force an odd value >= lo (required by several OpenCV kernels)."""
     n = int(n)
     if n < lo:
         n = lo
-    if n % 2 == 0:
-        n += 1
-    return n
+    return n if n % 2 else n + 1
+
+
+def _apply_crop(bgr: np.ndarray, p: Params) -> np.ndarray:
+    if None in (p.crop_x, p.crop_y, p.crop_w, p.crop_h):
+        return bgr
+    H, W = bgr.shape[:2]
+    x = max(0, min(int(p.crop_x), W - 1))
+    y = max(0, min(int(p.crop_y), H - 1))
+    w = max(1, min(int(p.crop_w), W - x))
+    h = max(1, min(int(p.crop_h), H - y))
+    return bgr[y:y + h, x:x + w]
 
 
 def detect_manuscript_bbox(bgr: np.ndarray) -> Optional[dict]:
     """
-    Best-effort auto-crop suggestion: find the papyrus leaf and exclude the
-    white mounting mat and the saturated colour-reference card.
-
-    This is only a *suggestion* shown in the UI -- the user always confirms or
-    adjusts it. Returns {x, y, w, h} in original-image pixels, or None.
+    Best-effort auto-crop: find the papyrus leaf and exclude the bright mounting
+    mat and the saturated Kodak colour-reference card. Returns {x,y,w,h} in
+    original-image pixels, or None. Always confirmable/adjustable in the UI.
     """
     h, w = bgr.shape[:2]
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    sat = hsv[:, :, 1]
-    val = hsv[:, :, 2]
-
-    # Papyrus: clearly darker/tanner than the bright mat, but not the vivid,
-    # highly-saturated patches of the Kodak colour card.
-    not_mat = val < 200            # exclude bright white mat
-    not_card = sat < 90            # exclude vivid colour patches
-    mask = (not_mat & not_card).astype(np.uint8) * 255
-
+    sat, val = hsv[:, :, 1], hsv[:, :, 2]
+    mask = ((val < 200) & (sat < 90)).astype(np.uint8) * 255   # not-mat & not-card
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35)))
-
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not cnts:
         return None
     biggest = max(cnts, key=cv2.contourArea)
-    if cv2.contourArea(biggest) < 0.04 * w * h:   # too small to be the leaf
+    if cv2.contourArea(biggest) < 0.04 * w * h:
         return None
     x, y, bw, bh = cv2.boundingRect(biggest)
-
-    # Pad slightly so we don't shave edge strokes.
     pad = int(0.01 * max(w, h))
-    x = max(0, x - pad)
-    y = max(0, y - pad)
-    bw = min(w - x, bw + 2 * pad)
-    bh = min(h - y, bh + 2 * pad)
+    x, y = max(0, x - pad), max(0, y - pad)
+    bw, bh = min(w - x, bw + 2 * pad), min(h - y, bh + 2 * pad)
     return {"x": int(x), "y": int(y), "w": int(bw), "h": int(bh)}
 
 
+def _despeckle_alpha(alpha8: np.ndarray, min_blob: int) -> np.ndarray:
+    """Drop connected ink regions smaller than min_blob pixels."""
+    mask = (alpha8 > 0).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    keep = np.ones(n, dtype=bool)
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_AREA] < int(min_blob):
+            keep[i] = False
+    return np.where(keep[labels], alpha8, 0).astype(np.uint8)
+
+
 # --------------------------------------------------------------------------- #
-# Pipeline
+# Primary: ink -> transparent facsimile
+# --------------------------------------------------------------------------- #
+
+def extract_ink_rgba(bgr: np.ndarray, p: Params) -> np.ndarray:
+    """
+    Isolate the ink and return an RGBA image (uint8, channels R,G,B,A) with a
+    fully transparent background. Ink darkness becomes alpha, so fading and
+    ambiguous marks are preserved as partial transparency -- nothing is forced,
+    nothing is invented.
+    """
+    img = _apply_crop(bgr, p)
+
+    # Work in CIELAB lightness: ink is darker than papyrus regardless of hue.
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    L = lab[:, :, 0].astype(np.float32)
+
+    # Background = papyrus lightness with the ink "closed" away.
+    k = _odd(p.bg_kernel, lo=9)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    bg = cv2.morphologyEx(lab[:, :, 0], cv2.MORPH_CLOSE, kernel)
+    bg = cv2.GaussianBlur(bg, (0, 0), max(1.0, k / 3.0)).astype(np.float32) + 1e-3
+
+    # How much darker than the local papyrus each pixel is (0..1).
+    ink_frac = np.clip((bg - L) / bg, 0.0, 1.0)
+
+    # Soft ramp: below the floor -> transparent (papyrus texture); above it,
+    # ramp up gently so faint ink stays translucent.
+    floor = float(p.ink_floor)
+    gain = max(0.1, float(p.ink_gain))
+    alpha = np.clip((ink_frac - floor) * gain, 0.0, 1.0)
+    alpha8 = (alpha * 255.0).astype(np.uint8)
+
+    if p.min_blob and p.min_blob > 0:
+        alpha8 = _despeckle_alpha(alpha8, p.min_blob)
+
+    # Ink colour.
+    mode = (p.ink_color or "original").lower()
+    if mode == "original":
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    elif mode == "sepia":
+        rgb = np.zeros_like(img)
+        rgb[:] = (60, 40, 25)            # R,G,B dark brown
+    else:                                # black
+        rgb = np.zeros_like(img)
+
+    return np.dstack([rgb, alpha8]).astype(np.uint8)
+
+
+# --------------------------------------------------------------------------- #
+# Secondary: flat black-on-white preview
 # --------------------------------------------------------------------------- #
 
 def process(bgr: np.ndarray, p: Params) -> np.ndarray:
-    """
-    Run the cleaning pipeline. Input: BGR image (as read by cv2).
-    Output: single-channel uint8 black-on-white image (0 = ink, 255 = blank).
-    """
-    img = bgr
-
-    # 1. Crop ----------------------------------------------------------------
-    if None not in (p.crop_x, p.crop_y, p.crop_w, p.crop_h):
-        H, W = img.shape[:2]
-        x = max(0, min(int(p.crop_x), W - 1))
-        y = max(0, min(int(p.crop_y), H - 1))
-        wd = max(1, min(int(p.crop_w), W - x))
-        ht = max(1, min(int(p.crop_h), H - y))
-        img = img[y:y + ht, x:x + wd]
-
-    # 2. Grayscale -----------------------------------------------------------
+    """Flat black-on-white binary preview (single channel)."""
+    img = _apply_crop(bgr, p)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 3. Background flattening (even out lighting & fibre tone) ---------------
-    if p.flatten:
-        k = _odd(p.bg_kernel, lo=3)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-        # Closing estimates the background (text removed); divide to flatten.
-        bg = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
-        gray = cv2.divide(gray, bg, scale=255)
+    k = _odd(p.bg_kernel, lo=3)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    bg = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+    gray = cv2.divide(gray, bg, scale=255)
 
-    # 4. Local contrast ------------------------------------------------------
     if p.clahe:
-        clahe = cv2.createCLAHE(clipLimit=max(0.1, float(p.clahe_clip)),
-                                tileGridSize=(8, 8))
-        gray = clahe.apply(gray)
+        gray = cv2.createCLAHE(clipLimit=max(0.1, float(p.clahe_clip)),
+                               tileGridSize=(8, 8)).apply(gray)
 
-    # 5. Threshold to black-on-white ----------------------------------------
     method = (p.threshold or "adaptive").lower()
     if method == "otsu":
-        _, binimg = cv2.threshold(gray, 0, 255,
-                                  cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        _, out = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     elif method == "manual":
-        _, binimg = cv2.threshold(gray, int(p.manual_thresh), 255,
-                                  cv2.THRESH_BINARY)
-    else:  # adaptive (default)
-        binimg = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,
-            _odd(p.block_size, lo=3), int(p.C))
-
-    # 6. Optional despeckle --------------------------------------------------
-    # Removes isolated specks ONLY if the user opts in (min_blob > 0). Off by
-    # default so genuine but faint ink is never discarded.
-    if p.min_blob and p.min_blob > 0:
-        ink = (binimg == 0).astype(np.uint8)  # ink pixels = 1
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
-        keep = np.ones(n, dtype=bool)
-        for i in range(1, n):
-            if stats[i, cv2.CC_STAT_AREA] < int(p.min_blob):
-                keep[i] = False
-        cleaned_ink = keep[labels]
-        binimg = np.where(cleaned_ink, 0, 255).astype(np.uint8)
-
-    return binimg
+        _, out = cv2.threshold(gray, int(p.manual_thresh), 255, cv2.THRESH_BINARY)
+    else:
+        out = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                    cv2.THRESH_BINARY, _odd(p.block_size, 3), int(p.C))
+    return out
 
 
 def encode_png(img: np.ndarray) -> bytes:

@@ -1,297 +1,264 @@
 "use strict";
 
-const state = {
-  id: null,
-  natW: 0,        // natural (original) image width in px
-  natH: 0,
-  crop: null,     // {x, y, w, h} in natural px
-};
+// Per-side state. Each side: {id, natW, natH, crop, autocrop, facsimileReady}
+const sides = { front: null, back: null };
+let active = "front";
+let activeTab = "original";
 
-const $ = (sel) => document.querySelector(sel);
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
 
-// Slider/checkbox/select ids whose values are sent to the backend.
-const PARAM_IDS = ["flatten", "bg_kernel", "clahe", "clahe_clip",
-                   "threshold", "block_size", "C", "manual_thresh", "min_blob"];
-
-// --------------------------------------------------------------------------- //
-// Init
-// --------------------------------------------------------------------------- //
+const SLIDERS = ["bg_kernel", "ink_floor", "ink_gain", "min_blob", "cm"];
 
 window.addEventListener("DOMContentLoaded", () => {
+  bindSlots();
   bindControls();
   bindTabs();
   bindCrop();
-  bindMarkers();
-  bindActions();
+  $("#auto-crop").addEventListener("click", applyAutoCrop);
+  $("#reset-crop").addEventListener("click", () => { cur() && (cur().crop = null); renderCrop(); maybeLive(); });
+  $("#process").addEventListener("click", () => renderTab(activeTab, true));
+  $("#run-both").addEventListener("click", runBoth);
+  $("#ocr").addEventListener("click", runOcr);
+  $("#ink_color").addEventListener("change", maybeLive);
   checkHealth();
 });
 
+function cur() { return sides[active]; }
+
+// --------------------------------------------------------------------------- //
+// Health
+// --------------------------------------------------------------------------- //
 async function checkHealth() {
   try {
-    const r = await fetch("/api/health");
-    const j = await r.json();
+    const j = await (await fetch("/api/health")).json();
     const pill = $("#ocr-status");
     if (j.ocr_available) {
-      pill.textContent = "OCR ready (grc)";
-      pill.className = "pill pill-ok";
+      pill.textContent = "OCR ready (grc)"; pill.className = "pill pill-ok";
       $("#ocr").disabled = false;
-      $("#ocr-note").hidden = false;
     } else {
-      pill.textContent = "OCR off (manual only)";
-      pill.className = "pill pill-off";
+      pill.textContent = "OCR off"; pill.className = "pill pill-off";
     }
-  } catch (e) {
-    $("#ocr-status").textContent = "OCR unknown";
-  }
+  } catch { $("#ocr-status").textContent = "OCR unknown"; }
 }
 
 // --------------------------------------------------------------------------- //
-// Controls -> params
+// Controls
 // --------------------------------------------------------------------------- //
-
 function bindControls() {
-  // live numeric readouts
-  PARAM_IDS.forEach((id) => {
-    const el = $("#" + id);
-    if (!el) return;
-    const out = $("#" + id + "-out");
-    const sync = () => { if (out) out.textContent = el.value; };
-    el.addEventListener("input", () => {
-      sync();
-      toggleThresholdRows();
-      maybeLiveProcess();
-    });
+  SLIDERS.forEach((id) => {
+    const el = $("#" + id), out = $("#" + id + "-out");
+    const sync = () => { if (out) out.textContent = (id === "ink_floor") ? facfmt(el.value) : el.value; };
+    el.addEventListener("input", () => { sync(); if (id === "cm") updateDpi(); maybeLive(); });
     sync();
   });
-  toggleThresholdRows();
+  updateDpi();
 }
+function facfmt(v) { return Number(v).toFixed(2); }
 
-function toggleThresholdRows() {
-  const method = $("#threshold").value;
-  document.querySelectorAll("[data-when]").forEach((d) => {
-    d.hidden = d.getAttribute("data-when") !== method;
-  });
+function widthPx() {
+  const s = cur(); if (!s) return 0;
+  return s.crop ? s.crop.w : s.natW;
+}
+function computeDpi() {
+  const cm = +$("#cm").value;
+  if (!cm || !widthPx()) return 0;
+  return Math.round(widthPx() * 2.54 / cm);
+}
+function updateDpi() {
+  const cm = +$("#cm").value;
+  $("#cm-out").textContent = cm ? cm.toFixed(1) : "—";
+  const dpi = computeDpi();
+  $("#dpi-readout").textContent = dpi ? dpi + " DPI" : "unset";
 }
 
 function collectParams() {
+  const s = cur();
   const p = {
-    flatten: $("#flatten").checked,
     bg_kernel: +$("#bg_kernel").value,
-    clahe: $("#clahe").checked,
-    clahe_clip: +$("#clahe_clip").value,
-    threshold: $("#threshold").value,
-    block_size: +$("#block_size").value,
-    C: +$("#C").value,
-    manual_thresh: +$("#manual_thresh").value,
+    ink_floor: +$("#ink_floor").value,
+    ink_gain: +$("#ink_gain").value,
+    ink_color: $("#ink_color").value,
     min_blob: +$("#min_blob").value,
+    dpi: computeDpi(),
   };
-  if (state.crop) {
-    p.crop_x = state.crop.x; p.crop_y = state.crop.y;
-    p.crop_w = state.crop.w; p.crop_h = state.crop.h;
+  if (s && s.crop) {
+    p.crop_x = s.crop.x; p.crop_y = s.crop.y; p.crop_w = s.crop.w; p.crop_h = s.crop.h;
   }
   return p;
 }
 
 let liveTimer = null;
-function maybeLiveProcess() {
-  if (!state.id || !$("#live").checked) return;
+function maybeLive() {
+  updateDpi();
+  if (!cur() || !$("#live").checked) return;
+  if (activeTab === "original") return;     // nothing to recompute
   clearTimeout(liveTimer);
-  liveTimer = setTimeout(process, 250);
+  liveTimer = setTimeout(() => renderTab(activeTab, true), 250);
 }
 
 // --------------------------------------------------------------------------- //
-// Tabs
+// Side slots + upload
 // --------------------------------------------------------------------------- //
-
-function bindTabs() {
-  document.querySelectorAll(".tab").forEach((t) => {
-    t.addEventListener("click", () => showTab(t.dataset.tab));
+function bindSlots() {
+  $$(".side-slot input").forEach((inp) => {
+    inp.addEventListener("change", (e) => onUpload(e, inp.closest(".side-slot").dataset.side));
   });
-}
-function showTab(name) {
-  document.querySelectorAll(".tab").forEach((t) =>
-    t.classList.toggle("active", t.dataset.tab === name));
-  $("#stage-original").hidden = name !== "original";
-  $("#stage-cleaned").hidden = name !== "cleaned";
+  $$(".side-tab").forEach((t) =>
+    t.addEventListener("click", () => { if (!t.disabled) setActive(t.dataset.side); }));
 }
 
-// --------------------------------------------------------------------------- //
-// Upload
-// --------------------------------------------------------------------------- //
-
-function bindActions() {
-  $("#file-input").addEventListener("change", onUpload);
-  $("#process").addEventListener("click", process);
-  $("#auto-crop").addEventListener("click", applyAutoCrop);
-  $("#reset-crop").addEventListener("click", () => { state.crop = null; renderCrop(); maybeLiveProcess(); });
-  $("#ocr").addEventListener("click", runOcr);
-  $("#save").addEventListener("click", save);
-  // re-run on checkbox/select change too
-  ["flatten", "clahe", "threshold"].forEach((id) =>
-    $("#" + id).addEventListener("change", maybeLiveProcess));
-}
-
-async function onUpload(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-  const fd = new FormData();
-  fd.append("image", file);
-  const r = await fetch("/api/upload", { method: "POST", body: fd });
-  const j = await r.json();
+async function onUpload(e, side) {
+  const file = e.target.files[0]; if (!file) return;
+  const fd = new FormData(); fd.append("image", file);
+  const slot = document.querySelector(`.side-slot[data-side="${side}"]`);
+  slot.querySelector(".slot-status").textContent = "uploading…";
+  const j = await (await fetch("/api/upload", { method: "POST", body: fd })).json();
   if (j.error) { alert("Upload failed: " + j.error); return; }
 
-  state.id = j.id; state.natW = j.w; state.natH = j.h;
-  state.crop = null;
-  state.autocrop = j.autocrop || null;
+  sides[side] = { id: j.id, natW: j.w, natH: j.h, crop: j.autocrop ? { ...j.autocrop } : null,
+                  autocrop: j.autocrop, facsimileReady: false };
+  slot.classList.add("loaded");
+  slot.querySelector(".slot-status").textContent = `${j.w}×${j.h}`;
+  document.querySelector(`.side-tab[data-side="${side}"]`).disabled = false;
+  $("#run-both").disabled = false;
+  setActive(side);
+}
 
+function setActive(side) {
+  if (!sides[side]) return;
+  active = side;
+  $$(".side-tab").forEach((t) => t.classList.toggle("active", t.dataset.side === side));
   const img = $("#img-original");
-  img.onload = () => { renderCrop(); process(); };
-  img.src = "/file/original/" + j.id + "?t=" + Date.now();
+  img.onload = () => { renderCrop(); };
+  img.src = "/file/original/" + sides[side].id + "?t=" + Date.now();
   $("#placeholder").hidden = true;
-  showTab("original");
+  updateDpi();
+  renderTab(activeTab, false);
 }
 
 // --------------------------------------------------------------------------- //
-// Crop selection (drag a box on the original image)
+// Tabs / views
 // --------------------------------------------------------------------------- //
+function bindTabs() {
+  $$(".tab").forEach((t) => t.addEventListener("click", () => { activeTab = t.dataset.tab; renderTab(activeTab, false); }));
+}
 
+function showStage(name) {
+  $("#stage-original").hidden = name !== "original";
+  $("#stage-facsimile").hidden = name !== "facsimile";
+  $("#stage-preview").hidden = name !== "preview";
+  $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+}
+
+async function renderTab(name, force) {
+  activeTab = name;
+  showStage(name);
+  const s = cur();
+  const dl = $("#download");
+  if (name === "original") { dl.hidden = true; renderCrop(); return; }
+  if (!s) return;
+  if (name === "facsimile") {
+    await runFacsimile(force);
+    dl.hidden = false; dl.href = "/api/download/facsimile/" + s.id;
+  } else if (name === "preview") {
+    dl.hidden = true;
+    await runPreview();
+  }
+}
+
+async function runFacsimile(force) {
+  const s = cur(); if (!s) return;
+  const btn = $("#process"); btn.disabled = true; btn.textContent = "Processing…";
+  try {
+    const j = await post("/api/facsimile", { id: s.id, params: collectParams() });
+    if (j.error) { alert(j.error); return; }
+    $("#img-facsimile").src = j.image;
+    s.facsimileReady = true;
+    $("#dims").textContent = `${j.w}×${j.h}px` + (computeDpi() ? ` @ ${computeDpi()} DPI` : "");
+  } finally { btn.disabled = false; btn.textContent = "Process side"; }
+}
+
+async function runPreview() {
+  const s = cur(); if (!s) return;
+  const j = await post("/api/preview", { id: s.id, params: collectParams() });
+  if (j.error) { alert(j.error); return; }
+  $("#img-preview").src = j.image;
+}
+
+async function runBoth() {
+  const order = ["front", "back"].filter((k) => sides[k]);
+  for (const side of order) {
+    setActive(side);
+    activeTab = "facsimile"; showStage("facsimile");
+    await runFacsimile(true);
+    $("#download").hidden = false;
+    $("#download").href = "/api/download/facsimile/" + sides[side].id;
+  }
+  alert("Done. Facsimile ready for: " + order.join(" + ") +
+        ".\nSwitch sides above and use Download PNG for each.");
+}
+
+// --------------------------------------------------------------------------- //
+// Crop (drag on original)
+// --------------------------------------------------------------------------- //
 function bindCrop() {
   const wrap = $("#image-wrap");
   let dragging = false, sx = 0, sy = 0;
-
   wrap.addEventListener("mousedown", (e) => {
-    if (!state.id) return;
+    if (!cur() || activeTab !== "original") return;
     dragging = true;
-    const r = wrap.getBoundingClientRect();
-    sx = e.clientX - r.left; sy = e.clientY - r.top;
+    const r = wrap.getBoundingClientRect(); sx = e.clientX - r.left; sy = e.clientY - r.top;
   });
   window.addEventListener("mousemove", (e) => {
     if (!dragging) return;
     const r = wrap.getBoundingClientRect();
     const cx = Math.max(0, Math.min(e.clientX - r.left, r.width));
     const cy = Math.max(0, Math.min(e.clientY - r.top, r.height));
-    const x = Math.min(sx, cx), y = Math.min(sy, cy);
-    const w = Math.abs(cx - sx), h = Math.abs(cy - sy);
-    const scale = state.natW / r.width;   // displayed -> natural
-    state.crop = { x: Math.round(x * scale), y: Math.round(y * scale),
-                   w: Math.round(w * scale), h: Math.round(h * scale) };
+    const scale = cur().natW / r.width;
+    cur().crop = { x: Math.round(Math.min(sx, cx) * scale), y: Math.round(Math.min(sy, cy) * scale),
+                   w: Math.round(Math.abs(cx - sx) * scale), h: Math.round(Math.abs(cy - sy) * scale) };
     renderCrop();
   });
   window.addEventListener("mouseup", () => {
-    if (!dragging) return;
-    dragging = false;
-    if (state.crop && (state.crop.w < 10 || state.crop.h < 10)) state.crop = null;
-    renderCrop();
-    maybeLiveProcess();
+    if (!dragging) return; dragging = false;
+    if (cur().crop && (cur().crop.w < 10 || cur().crop.h < 10)) cur().crop = null;
+    renderCrop(); updateDpi(); maybeLive();
   });
+  window.addEventListener("resize", renderCrop);
 }
 
 function renderCrop() {
-  const box = $("#crop-box");
-  const wrap = $("#image-wrap");
-  const r = wrap.getBoundingClientRect();
-  if (!state.crop || !state.natW) {
-    box.hidden = true;
-    $("#crop-readout").textContent = "no crop";
-    return;
-  }
-  const scale = r.width / state.natW;   // natural -> displayed
+  const box = $("#crop-box"), wrap = $("#image-wrap"), s = cur();
+  if (!s || !s.crop) { box.hidden = true; $("#crop-readout").textContent = "no crop"; return; }
+  const r = wrap.getBoundingClientRect(), scale = r.width / s.natW;
   box.hidden = false;
-  box.style.left = state.crop.x * scale + "px";
-  box.style.top = state.crop.y * scale + "px";
-  box.style.width = state.crop.w * scale + "px";
-  box.style.height = state.crop.h * scale + "px";
-  const c = state.crop;
-  $("#crop-readout").textContent = `crop ${c.w}×${c.h} @ (${c.x}, ${c.y})`;
+  box.style.left = s.crop.x * scale + "px"; box.style.top = s.crop.y * scale + "px";
+  box.style.width = s.crop.w * scale + "px"; box.style.height = s.crop.h * scale + "px";
+  $("#crop-readout").textContent = `crop ${s.crop.w}×${s.crop.h} @ (${s.crop.x}, ${s.crop.y})`;
 }
 
 function applyAutoCrop() {
-  if (state.autocrop) { state.crop = { ...state.autocrop }; renderCrop(); maybeLiveProcess(); }
-  else alert("No crop could be auto-detected — draw one by hand.");
+  const s = cur(); if (!s) return;
+  if (s.autocrop) { s.crop = { ...s.autocrop }; renderCrop(); updateDpi(); maybeLive(); }
+  else alert("No crop auto-detected — draw one by hand on the Original view.");
 }
 
-window.addEventListener("resize", renderCrop);
-
 // --------------------------------------------------------------------------- //
-// Process / OCR / Save
+// OCR (optional)
 // --------------------------------------------------------------------------- //
-
-async function process() {
-  if (!state.id) return;
-  const btn = $("#process");
-  btn.disabled = true; btn.textContent = "Processing…";
-  try {
-    const r = await fetch("/api/process", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: state.id, params: collectParams() }),
-    });
-    const j = await r.json();
-    if (j.error) { alert(j.error); return; }
-    $("#img-cleaned").src = j.image;
-    showTab("cleaned");
-  } finally {
-    btn.disabled = false; btn.textContent = "Process";
-  }
-}
-
 async function runOcr() {
-  if (!state.id) return;
-  if ($("#text").value.trim() &&
-      !confirm("Append an OCR draft below your current text?")) return;
-  const btn = $("#ocr");
-  btn.disabled = true; btn.textContent = "Reading…";
+  const s = cur(); if (!s) { alert("Upload an image first."); return; }
+  const btn = $("#ocr"); btn.disabled = true; btn.textContent = "Reading…";
   try {
-    const r = await fetch("/api/ocr", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: state.id, params: collectParams() }),
-    });
-    const j = await r.json();
+    const j = await post("/api/ocr", { id: s.id, params: collectParams() });
     if (j.error) { alert("OCR: " + j.error); return; }
-    const ta = $("#text");
-    const banner = "\n\n--- OCR draft (UNVERIFIED — correct against image) ---\n";
-    ta.value = ta.value.trim() ? ta.value + banner + j.text : j.text;
-  } finally {
-    btn.disabled = false; btn.textContent = "OCR draft";
-  }
-}
-
-async function save() {
-  if (!state.id) { alert("Upload an image first."); return; }
-  const r = await fetch("/api/save", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: state.id, text: $("#text").value }),
-  });
-  const j = await r.json();
-  if (j.error) { alert(j.error); return; }
-  $("#save-status").textContent = "saved ✓";
-  const dl = $("#download");
-  dl.hidden = false;
-  dl.href = "/api/download/" + state.id;
-  setTimeout(() => ($("#save-status").textContent = ""), 2500);
+    $("#text").value = "--- OCR draft (UNVERIFIED) ---\n" + j.text;
+  } finally { btn.disabled = false; btn.textContent = "Get OCR draft"; }
 }
 
 // --------------------------------------------------------------------------- //
-// Leiden marker toolbar
-// --------------------------------------------------------------------------- //
-
-function bindMarkers() {
-  document.querySelectorAll(".marker-bar button").forEach((b) => {
-    b.addEventListener("click", () => {
-      const ta = $("#text");
-      const s = ta.selectionStart, e = ta.selectionEnd;
-      const sel = ta.value.slice(s, e);
-      let insert, caret;
-      if (b.dataset.wrap) {
-        const [pre, post] = b.dataset.wrap.split("|");
-        insert = pre + sel + post;
-        caret = s + pre.length + sel.length;
-      } else {
-        insert = b.dataset.ins;
-        caret = s + insert.length;
-      }
-      ta.setRangeText(insert, s, e, "end");
-      ta.focus();
-      ta.selectionStart = ta.selectionEnd = caret;
-    });
-  });
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return r.json();
 }

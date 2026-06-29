@@ -1,25 +1,27 @@
-# Manuscript Text Workspace
+# Manuscript Facsimile Workspace
 
-A local, browser-based tool for faithfully extracting the text from photographs
-of manuscripts (e.g. Greek majuscule papyri).
+A local, browser-based tool that extracts the surviving ink from photographs of
+manuscripts (e.g. Greek majuscule papyri) and outputs it as a **faithful
+facsimile on a transparent background** — print-ready, 1:1, suitable for
+printing onto blank papyrus.
 
-## Design principle: no invented text
+## Design principle: nothing is invented
 
-The hard truth about ancient manuscripts: no off-the-shelf OCR can read papyrus
-majuscule script accurately, and AI models that *can* sometimes **hallucinate**
-plausible-but-wrong text. This tool is built so that **nothing is ever
-fabricated**:
+The output is a **historical facsimile, not a restoration**. We never recognise,
+reconstruct, "improve", or generate any character — we only isolate the ink that
+is physically present:
 
-1. **Image cleaning is 100% deterministic** — classic OpenCV operations only
-   (crop, lighting flatten, contrast, threshold). Where ink is lost or broken,
-   the output stays blank, so **damage is shown exactly as it is** and never
-   "filled in".
-2. **The text is transcribed by you**, the human, in a side-by-side workspace,
-   using the standard papyrological (Leiden) markers for damaged / uncertain
-   readings.
-3. **OCR is optional and clearly labelled "UNVERIFIED"** — a rough draft to
-   correct against the image, never trusted output. It is fully disabled if the
-   `tesseract` engine isn't installed.
+- **100% deterministic image processing** (classic OpenCV). No machine learning,
+  no text recognition, no generation, so hallucination is not even possible.
+- **Ink is carried as a soft alpha channel**, so fading, broken strokes, smudges
+  and gaps are preserved as partial transparency rather than forced to solid
+  black. Faint ink stays faint; ambiguous marks stay ambiguous.
+- **Where there is no ink, the output is empty** (transparent). Damage shows
+  exactly as it is.
+- Despeckle is **off by default** so faint / broken strokes are never erased.
+
+An optional Tesseract OCR draft exists purely as a typing aid; it is clearly
+labelled **UNVERIFIED**, never trusted, and disabled if the engine is absent.
 
 ## Quick start
 
@@ -40,34 +42,48 @@ python app.py
 
 ## Workflow
 
-1. **Upload** a manuscript photo.
-2. **Crop** to the leaf — drag a box on the *Original* image (or *Auto-detect*)
+1. **Upload** the **Front** and **Back** of the leaf into their slots.
+2. **Crop** to the leaf — drag a box on the *Original* view (or *Auto-detect*)
    to drop the mounting mat and colour-reference card.
-3. **Tune** the cleaning sliders until the *Cleaned* image shows the surviving
-   ink clearly. Every control is a deterministic image operation:
-   - *Flatten lighting* — evens out the papyrus tone.
-   - *CLAHE* — local contrast.
-   - *Threshold* — adaptive (default), Otsu, or a manual cutoff to get
-     black-on-white.
-   - *Despeckle* — off by default so faint strokes are never erased.
-4. **Transcribe** in the right-hand editor. Marker buttons insert Leiden
-   conventions: `[ ]` restored, ◌̣ uncertain, `( )` expansion, ⟦ ⟧ deletion,
-   lacuna, ◌̅ overline (*nomen sacrum*).
-5. **Save / Download** the transcription as a `.txt` file.
+3. **Tune** the extraction (all deterministic):
+   - *Background scale* — size of the lighting/papyrus-tone estimate.
+   - *Floor* — drops faint papyrus texture; keep low to preserve faint ink.
+   - *Gain* — how gently fading ramps into opacity.
+   - *Ink colour* — Original (most faithful), Black, or Sepia.
+   - *Despeckle* — off by default.
+4. **Print scale** — enter the leaf's real width (read it off the photo's ruler)
+   so the PNG embeds the correct DPI and prints at true 1:1 size.
+5. **Run both (automatic)** processes front + back, or *Process side* for one.
+6. **Download PNG** — a transparent-background facsimile per side.
+
+## Output
+
+- RGBA PNG, fully transparent background, ink as soft alpha.
+- Original orientation, size, proportions and layout preserved (no deskew /
+  dewarp — "exactly as seen").
+- Embedded DPI for 1:1 printing.
 
 ## Layout
 
 ```
 app.py                 Flask server + API
 manuscript/
-  pipeline.py          deterministic image cleaning (OpenCV)
+  pipeline.py          deterministic ink extraction + background removal (OpenCV)
   ocr.py               optional, clearly-flagged OCR draft
 static/                single-page workspace (HTML/CSS/JS)
 uploads/ outputs/      runtime data (git-ignored)
 ```
 
-## Status
+## Roadmap toward full automation
 
-Early scaffold — this is an iterative, trial-and-error project. The cleaning
-pipeline and workspace are in place; expect to tune defaults per manuscript and
-extend the pipeline (deskew, dewarp, per-line cropping) over time.
+The goal is hands-off: upload front + back, get two facsimiles automatically.
+Already automatic: background removal, ink isolation, transparency, soft fading,
+best-effort auto-crop. Still to come:
+
+- Robust auto-crop / leaf detection tuned on real manuscript photos.
+- Automatic ruler detection for true 1:1 scale without manual entry.
+- Optional SVG (vector) export.
+- Batch / folder processing and an API for unattended runs.
+
+This is an iterative, trial-and-error project; defaults will be tuned per real
+manuscript image as samples are provided.

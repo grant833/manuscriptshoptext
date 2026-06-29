@@ -40,6 +40,10 @@ async function checkHealth() {
     } else {
       pill.textContent = "OCR off"; pill.className = "pill pill-off";
     }
+    if (j.ml_available) {            // show + default-on the ML cleanup
+      $("#ml-row").hidden = false;
+      $("#ml_clean").checked = true;
+    }
   } catch { $("#ocr-status").textContent = "OCR unknown"; }
 }
 
@@ -79,6 +83,7 @@ function collectParams() {
     edge_trim: +$("#edge_trim").value,
     min_blob: +$("#min_blob").value,
     min_thick: +$("#min_thick").value,
+    ml_clean: $("#ml_clean").checked,
     ink_color: $("#ink_color").value,
     min_blob: +$("#min_blob").value,
     dpi: computeDpi(),
@@ -93,6 +98,7 @@ let liveTimer = null;
 function maybeLive() {
   updateDpi();
   if (!cur() || !$("#live").checked) return;
+  if ($("#ml_clean").checked) return;       // ML is too slow for live; use Process
   if (activeTab === "original") return;     // nothing to recompute
   clearTimeout(liveTimer);
   liveTimer = setTimeout(() => renderTab(activeTab, true), 250);

@@ -25,6 +25,8 @@ Requires scikit-learn (optional dependency). `available()` reports if usable.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import cv2
 
@@ -139,7 +141,8 @@ def train(X, y, n_estimators=120, max_depth=18, jobs=4):
     return clf
 
 
-def apply(clf, bgr_leaf: np.ndarray, min_blob: int = 40) -> np.ndarray:
+def apply(clf, bgr_leaf: np.ndarray, min_blob: int = 90,
+          min_thick: float = 7.0) -> np.ndarray:
     """Return a cleaned ink mask (uint8 0/255) at the leaf's original size."""
     H0, W0 = bgr_leaf.shape[:2]
     img, L = _scaled_L(bgr_leaf)
@@ -147,19 +150,41 @@ def apply(clf, bgr_leaf: np.ndarray, min_blob: int = 40) -> np.ndarray:
     F = features(L)
     prob = clf.predict_proba(F.reshape(-1, F.shape[-1]))[:, 1].reshape(L.shape)
     mask = ((prob >= 0.5) & (interior > 0)).astype(np.uint8) * 255
-    if min_blob:
+
+    # Post-filter: drop specks (area) and thin fibres (stroke thickness).
+    if min_blob or min_thick:
         n, lbl, st, _ = cv2.connectedComponentsWithStats(mask, 8)
         keep = np.ones(n, bool); keep[0] = False
+        if min_thick:
+            dt = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+            maxd = np.zeros(n, np.float32)
+            np.maximum.at(maxd, lbl.ravel(), dt.ravel())
         for i in range(1, n):
-            if st[i, cv2.CC_STAT_AREA] < min_blob:
+            if (min_blob and st[i, cv2.CC_STAT_AREA] < min_blob) or \
+               (min_thick and 2 * maxd[i] < min_thick):
                 keep[i] = False
         mask = np.where(keep[lbl], 255, 0).astype(np.uint8)
     return cv2.resize(mask, (W0, H0), interpolation=cv2.INTER_NEAREST)
 
 
 def save(clf, path: str):
-    joblib.dump(clf, path)
+    joblib.dump(clf, path, compress=3)
 
 
 def load(path: str):
     return joblib.load(path)
+
+
+_MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "models")
+DEFAULT_MODEL = os.path.join(_MODELS_DIR, "denoiser.joblib")
+
+
+def load_default():
+    """Load the bundled model if scikit-learn is available and the file exists."""
+    if _SK and os.path.exists(DEFAULT_MODEL):
+        try:
+            return joblib.load(DEFAULT_MODEL)
+        except Exception:
+            return None
+    return None

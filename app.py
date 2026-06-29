@@ -32,9 +32,20 @@ from flask import (Flask, jsonify, request, send_file, send_from_directory,
                    abort)
 
 from manuscript import ocr
-from manuscript.pipeline import (Params, process, extract_ink_rgba,
+from manuscript import denoiser
+from manuscript.pipeline import (Params, process, extract_ink_rgba, mask_to_rgba,
                                  extract_ink_svg, trace_mask_svg, svg_available,
                                  detect_manuscript_bbox, encode_png, _apply_crop)
+
+# Optional ML denoiser model, loaded once at startup if present.
+ML_MODEL = denoiser.load_default()
+
+
+def _ml_mask(file_id, bgr, params):
+    """ML-cleaned ink mask for the cropped leaf (cached for the editor/SVG)."""
+    leaf = _apply_crop(bgr, params)
+    mask = denoiser.apply(ML_MODEL, leaf)
+    return leaf, mask
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 UPLOADS = os.path.join(BASE, "uploads")
@@ -102,7 +113,8 @@ def static_files(fn):
 @app.get("/api/health")
 def health():
     return jsonify({"ocr_available": ocr.available(),
-                    "svg_available": svg_available()})
+                    "svg_available": svg_available(),
+                    "ml_available": ML_MODEL is not None})
 
 
 @app.post("/api/upload")
@@ -139,7 +151,11 @@ def _load(payload: dict):
 @app.post("/api/facsimile")
 def api_facsimile():
     file_id, bgr, params = _load(request.get_json(force=True))
-    rgba = extract_ink_rgba(bgr, params)
+    if params.ml_clean and ML_MODEL is not None:
+        leaf, mask = _ml_mask(file_id, bgr, params)
+        rgba = mask_to_rgba(leaf, mask, params.ink_color)
+    else:
+        rgba = extract_ink_rgba(bgr, params)
     png = _rgba_to_png_bytes(rgba, params.dpi)
     # cache the facsimile + the cropped original (reference layer for the editor)
     with open(os.path.join(OUTPUTS, file_id + "_facsimile.png"), "wb") as fh:
@@ -189,7 +205,12 @@ def api_svg():
         return jsonify({"error": "SVG tracer (potrace) not installed"}), 503
     file_id, bgr, params = _load(request.get_json(force=True))
     try:
-        svg = extract_ink_svg(bgr, params)
+        if params.ml_clean and ML_MODEL is not None:
+            _, mask = _ml_mask(file_id, bgr, params)
+            svg = trace_mask_svg(mask, ink_color=params.ink_color,
+                                 outline=True, dpi=params.dpi)
+        else:
+            svg = extract_ink_svg(bgr, params, outline=True)
     except Exception as e:  # pragma: no cover
         return jsonify({"error": str(e)}), 500
     with open(os.path.join(OUTPUTS, file_id + "_facsimile.svg"), "w",

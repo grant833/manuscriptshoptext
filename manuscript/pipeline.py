@@ -64,6 +64,10 @@ class Params:
     # thin lines). At the 2150px leaf reference, auto-scaled. 0 = off.
     min_thick: float = 9.0
 
+    # Use the ML denoiser (if a model is loaded) instead of the deterministic
+    # extraction. Cleans papyrus fibre-noise far better; never invents text.
+    ml_clean: bool = False
+
     # --- Output scale ------------------------------------------------------ #
     # DPI to embed so the PNG/SVG prints at the correct physical size. 0 = unset.
     dpi: int = 0
@@ -248,6 +252,12 @@ def extract_ink_rgba(bgr: np.ndarray, p: Params) -> np.ndarray:
     """
     img, alpha8 = _ink_alpha(bgr, p)
     return np.dstack([_ink_rgb(img, p.ink_color), alpha8]).astype(np.uint8)
+
+
+def mask_to_rgba(bgr_leaf: np.ndarray, mask: np.ndarray, ink_color: str = "black") -> np.ndarray:
+    """Build an RGBA facsimile from a binary ink mask (255 = ink)."""
+    alpha8 = cv2.GaussianBlur(mask, (0, 0), 0.6)
+    return np.dstack([_ink_rgb(bgr_leaf, ink_color), alpha8]).astype(np.uint8)
 
 
 # --------------------------------------------------------------------------- #

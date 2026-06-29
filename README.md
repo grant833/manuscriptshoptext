@@ -57,14 +57,18 @@ python app.py
 4. **Print scale** — enter the leaf's real width (read it off the photo's ruler)
    so the PNG embeds the correct DPI and prints at true 1:1 size.
 5. **Run both (automatic)** processes front + back, or *Process side* for one.
-6. **Download PNG** — a transparent-background facsimile per side.
+6. **Download** — a transparent-background facsimile per side:
+   - *Facsimile (PNG)* — raster, transparent background.
+   - *Vector (SVG)* — the ink traced into scalable vector paths (via `potrace`),
+     transparent background; same idea as an Illustrator image-trace.
 
 ## Output
 
-- RGBA PNG, fully transparent background, ink as soft alpha.
+- RGBA PNG, fully transparent background, ink as alpha.
+- SVG vector facsimile (scalable paths, transparent background).
 - Original orientation, size, proportions and layout preserved (no deskew /
   dewarp — "exactly as seen").
-- Embedded DPI for 1:1 printing.
+- Embedded DPI / physical size for 1:1 printing.
 
 ## Layout
 
@@ -85,8 +89,9 @@ best-effort auto-crop. Still to come:
 
 - Robust auto-crop / leaf detection tuned on real manuscript photos.
 - Automatic ruler detection for true 1:1 scale without manual entry.
-- Optional SVG (vector) export.
-- Batch / folder processing and an API for unattended runs.
+- Frayed edge-fibre cleanup.
+
+Done: SVG vector export; drop-folder batch processing (`watch.py`).
 
 This is an iterative, trial-and-error project; defaults will be tuned per real
 manuscript image as samples are provided.

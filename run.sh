@@ -15,5 +15,9 @@ if ! command -v tesseract >/dev/null 2>&1; then
   echo "Note: 'tesseract' not found — optional OCR draft will be disabled."
   echo "      To enable: apt-get install -y tesseract-ocr tesseract-ocr-grc"
 fi
+if ! command -v potrace >/dev/null 2>&1; then
+  echo "Note: 'potrace' not found — SVG vector export will be disabled."
+  echo "      To enable: apt-get install -y potrace"
+fi
 
 python app.py

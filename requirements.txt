@@ -6,3 +6,6 @@ opencv-python-headless>=4.9
 # Install the binary separately, e.g. on Debian/Ubuntu:
 #   apt-get install -y tesseract-ocr tesseract-ocr-grc
 pytesseract>=0.3.10
+
+# Optional system binary for SVG vector export (no pip package needed):
+#   apt-get install -y potrace

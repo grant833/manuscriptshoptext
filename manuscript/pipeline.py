@@ -19,6 +19,11 @@ contrast while tuning.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+import os
+import re
+import shutil
+import subprocess
+import tempfile
 from typing import Optional
 
 import cv2
@@ -61,8 +66,13 @@ class Params:
     min_blob: int = 50
 
     # --- Output scale ------------------------------------------------------ #
-    # DPI to embed so the PNG prints at the correct physical size. 0 = unset.
+    # DPI to embed so the PNG/SVG prints at the correct physical size. 0 = unset.
     dpi: int = 0
+
+    # --- SVG vector export ------------------------------------------------- #
+    # Alpha cutoff (0-255) for which ink becomes a solid vector shape. Higher =
+    # only firmer ink is vectorised.
+    svg_threshold: int = 90
 
     # --- Binary preview only ('process') ----------------------------------- #
     clahe: bool = True
@@ -135,20 +145,16 @@ def detect_manuscript_bbox(bgr: np.ndarray) -> Optional[dict]:
 # Primary: ink -> transparent facsimile
 # --------------------------------------------------------------------------- #
 
-def extract_ink_rgba(bgr: np.ndarray, p: Params) -> np.ndarray:
+def _ink_alpha(bgr: np.ndarray, p: Params):
     """
-    Isolate the ink and return an RGBA image (uint8, channels R,G,B,A) on a
-    fully transparent background. Nothing is recognised, reconstructed or
-    invented -- only ink that is physically present is kept.
-
-    Method (all deterministic), tuned against real papyrus photos:
-      1. Background-normalise the CIELAB lightness so uneven lighting, the dark
-         frayed edges and the papyrus fibre tone are flattened out.
+    Shared core: isolate the ink and return (cropped_bgr, alpha8) where alpha8
+    is the ink coverage (0 = blank, 255 = full ink). All deterministic, tuned
+    against real papyrus photos:
+      1. Background-normalise CIELAB lightness so uneven lighting, dark frayed
+         edges and the papyrus fibre tone are flattened out.
       2. Local adaptive threshold -> a clean ink mask that ignores gradual
          darkening (edges / fold) and keeps only locally-dark strokes.
-      3. Brown-rejection chroma gate: carbon ink is near-neutral, papyrus fibre
-         is brown, so fade out the browner pixels. Faded/brown ink survives as
-         partial transparency rather than being dropped or forced solid.
+      3. Optional brown-rejection chroma gate.
       4. Despeckle stray fibre flecks (real strokes are far larger).
     """
     img = _apply_crop(bgr, p)
@@ -157,8 +163,7 @@ def extract_ink_rgba(bgr: np.ndarray, p: Params) -> np.ndarray:
 
     # Auto-scale pixel-sized parameters by the cropped leaf width (a proxy for
     # letter size) against a ~1000px reference, so the same defaults work at any
-    # resolution -- a bigger photo of a similar leaf gets proportionally bigger
-    # kernels.
+    # resolution.
     scale = max(0.25, img.shape[1] / 1000.0)
 
     # 1. Background-normalise lightness (close ink away, then divide).
@@ -197,18 +202,83 @@ def extract_ink_rgba(bgr: np.ndarray, p: Params) -> np.ndarray:
     # Light feather so stroke edges are not jagged, then to 0..255.
     alpha8 = cv2.GaussianBlur((alpha * 255.0).astype(np.uint8), (0, 0),
                               max(0.4, 0.6 * scale))
+    return img, alpha8
 
-    # Ink colour (fading carried by alpha).
-    mode = (p.ink_color or "black").lower()
+
+def _ink_rgb(img: np.ndarray, mode: str) -> np.ndarray:
+    mode = (mode or "black").lower()
     if mode == "original":
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    elif mode == "sepia":
+        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    if mode == "sepia":
         rgb = np.zeros_like(img)
         rgb[:] = (60, 40, 25)            # R,G,B dark brown
-    else:                                # black
-        rgb = np.zeros_like(img)
+        return rgb
+    return np.zeros_like(img)            # black
 
-    return np.dstack([rgb, alpha8]).astype(np.uint8)
+
+def extract_ink_rgba(bgr: np.ndarray, p: Params) -> np.ndarray:
+    """
+    Isolate the ink and return an RGBA image (channels R,G,B,A) on a fully
+    transparent background. Nothing is recognised, reconstructed or invented --
+    only ink physically present is kept; fading is carried by the alpha channel.
+    """
+    img, alpha8 = _ink_alpha(bgr, p)
+    return np.dstack([_ink_rgb(img, p.ink_color), alpha8]).astype(np.uint8)
+
+
+# --------------------------------------------------------------------------- #
+# Vector (SVG) facsimile
+# --------------------------------------------------------------------------- #
+
+_INK_HEX = {"black": "#000000", "sepia": "#3c2819"}
+
+
+def svg_available() -> bool:
+    """True if the `potrace` tracer binary is installed."""
+    return shutil.which("potrace") is not None
+
+
+def extract_ink_svg(bgr: np.ndarray, p: Params) -> str:
+    """
+    Trace the isolated ink into a scalable SVG of vector paths on a transparent
+    background (the same kind of output as a hand Illustrator image-trace). The
+    ink mask comes from the exact same deterministic extraction as the PNG, so
+    nothing is invented; potrace only smooths the existing shapes into curves.
+
+    Requires the `potrace` binary. Raises RuntimeError if it is missing.
+    """
+    if not svg_available():
+        raise RuntimeError("SVG tracer 'potrace' is not installed")
+
+    img, alpha8 = _ink_alpha(bgr, p)
+    h, w = alpha8.shape[:2]
+    # Bitmap for potrace: ink = black (0), background = white (255).
+    mask = np.where(alpha8 >= int(p.svg_threshold), 0, 255).astype(np.uint8)
+
+    tmp = tempfile.mkdtemp(prefix="msvg_")
+    try:
+        pbm = os.path.join(tmp, "mask.pbm")
+        out = os.path.join(tmp, "trace.svg")
+        # PBM P4 (1-bit). 0 -> ink (black foreground for potrace).
+        from PIL import Image
+        Image.fromarray(mask, "L").convert("1").save(pbm)
+        subprocess.run(
+            ["potrace", pbm, "-s", "-t", "4", "-a", "1.2", "-O", "0.2", "-o", out],
+            check=True, capture_output=True)
+        svg = open(out, "r", encoding="utf-8").read()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    fill = _INK_HEX.get((p.ink_color or "black").lower(), "#000000")
+    svg = svg.replace('fill="#000000"', f'fill="{fill}"')
+
+    # Size for true 1:1 printing when a DPI is known; else leave potrace's units.
+    if p.dpi and p.dpi > 0:
+        win = w / float(p.dpi)
+        hin = h / float(p.dpi)
+        svg = re.sub(r'width="[^"]*"\s+height="[^"]*"',
+                     f'width="{win:.4f}in" height="{hin:.4f}in"', svg, count=1)
+    return svg
 
 
 # --------------------------------------------------------------------------- #

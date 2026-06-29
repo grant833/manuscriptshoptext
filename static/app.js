@@ -147,6 +147,7 @@ function bindTabs() {
 function showStage(name) {
   $("#stage-original").hidden = name !== "original";
   $("#stage-facsimile").hidden = name !== "facsimile";
+  $("#stage-svg").hidden = name !== "svg";
   $("#stage-preview").hidden = name !== "preview";
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
 }
@@ -161,10 +162,26 @@ async function renderTab(name, force) {
   if (name === "facsimile") {
     await runFacsimile(force);
     dl.hidden = false; dl.href = "/api/download/facsimile/" + s.id;
+    dl.textContent = "⬇ Download PNG";
+  } else if (name === "svg") {
+    await runSvg(force);
+    dl.hidden = false; dl.href = "/api/download/svg/" + s.id;
+    dl.textContent = "⬇ Download SVG";
   } else if (name === "preview") {
     dl.hidden = true;
     await runPreview();
   }
+}
+
+async function runSvg(force) {
+  const s = cur(); if (!s) return;
+  const btn = $("#process"); btn.disabled = true; btn.textContent = "Tracing…";
+  try {
+    const j = await post("/api/svg", { id: s.id, params: collectParams() });
+    if (j.error) { alert("SVG: " + j.error); return; }
+    $("#img-svg").src = j.image;
+    $("#dims").textContent = "vector (SVG)";
+  } finally { btn.disabled = false; btn.textContent = "Process side"; }
 }
 
 async function runFacsimile(force) {

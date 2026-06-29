@@ -24,7 +24,8 @@ import time
 import cv2
 import numpy as np
 
-from manuscript.pipeline import auto_params, extract_ink_rgba
+from manuscript.pipeline import (auto_params, extract_ink_rgba,
+                                 extract_ink_svg, svg_available)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 ALLOWED = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
@@ -43,13 +44,18 @@ def _read_bgr(path: str) -> np.ndarray:
 
 
 def process_file(path: str, outbox: str) -> str:
-    """Extract the facsimile for one image and write a transparent PNG."""
+    """Extract the facsimile for one image -> transparent PNG (+ SVG if able)."""
     bgr = _read_bgr(path)
-    rgba = extract_ink_rgba(bgr, auto_params(bgr))           # R,G,B,A
+    params = auto_params(bgr)
+    rgba = extract_ink_rgba(bgr, params)                     # R,G,B,A
     bgra = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)           # cv2 wants BGRA
     stem = os.path.splitext(os.path.basename(path))[0]
     out = os.path.join(outbox, stem + "_facsimile.png")
     cv2.imwrite(out, bgra)
+    if svg_available():
+        with open(os.path.join(outbox, stem + "_facsimile.svg"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(extract_ink_svg(bgr, params))
     return out
 
 

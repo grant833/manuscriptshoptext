@@ -33,6 +33,7 @@ from flask import (Flask, jsonify, request, send_file, send_from_directory,
 
 from manuscript import ocr
 from manuscript.pipeline import (Params, process, extract_ink_rgba,
+                                 extract_ink_svg, svg_available,
                                  detect_manuscript_bbox, encode_png)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -100,7 +101,8 @@ def static_files(fn):
 
 @app.get("/api/health")
 def health():
-    return jsonify({"ocr_available": ocr.available()})
+    return jsonify({"ocr_available": ocr.available(),
+                    "svg_available": svg_available()})
 
 
 @app.post("/api/upload")
@@ -147,6 +149,22 @@ def api_facsimile():
                     "w": int(rgba.shape[1]), "h": int(rgba.shape[0])})
 
 
+@app.post("/api/svg")
+def api_svg():
+    if not svg_available():
+        return jsonify({"error": "SVG tracer (potrace) not installed"}), 503
+    file_id, bgr, params = _load(request.get_json(force=True))
+    try:
+        svg = extract_ink_svg(bgr, params)
+    except Exception as e:  # pragma: no cover
+        return jsonify({"error": str(e)}), 500
+    with open(os.path.join(OUTPUTS, file_id + "_facsimile.svg"), "w",
+              encoding="utf-8") as fh:
+        fh.write(svg)
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return jsonify({"svg": svg, "image": "data:image/svg+xml;base64," + b64})
+
+
 @app.post("/api/preview")
 def api_preview():
     file_id, bgr, params = _load(request.get_json(force=True))
@@ -175,6 +193,16 @@ def download_facsimile(file_id):
     return send_file(p, as_attachment=True,
                      download_name=f"facsimile_{file_id}.png",
                      mimetype="image/png")
+
+
+@app.get("/api/download/svg/<file_id>")
+def download_svg(file_id):
+    p = os.path.join(OUTPUTS, file_id + "_facsimile.svg")
+    if not os.path.exists(p):
+        abort(404)
+    return send_file(p, as_attachment=True,
+                     download_name=f"facsimile_{file_id}.svg",
+                     mimetype="image/svg+xml")
 
 
 @app.get("/file/<kind>/<file_id>")
